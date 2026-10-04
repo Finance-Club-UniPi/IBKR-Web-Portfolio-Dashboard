@@ -25,6 +25,23 @@ from trade_history import load_uploaded_trades
 def build_layout(refresh_ms: int) -> html.Div:
     return html.Div([
 
+        # Branded first-load intro; CSS hides it after the reveal animation.
+        html.Div([
+            html.Div([
+                html.Div('UNIVERSITY OF PIRAEUS', className='startup-splash-eyebrow'),
+                html.Div(
+                    html.Img(
+                        src='/assets/finance-club-logo.png',
+                        alt='Finance Club UniPi',
+                        className='startup-splash-logo',
+                    ),
+                    className='startup-splash-logo-frame',
+                ),
+                html.Div(className='startup-splash-rule'),
+                html.Div('Portfolio dashboard', className='startup-splash-caption'),
+            ], className='startup-splash-content'),
+        ], id='startup-splash', role='presentation', **{'aria-hidden': 'true'}),
+
         # Sticky header
         html.Div([
             html.Div([

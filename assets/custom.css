@@ -226,6 +226,102 @@
   transform: translate(-50%, -50%);
 }
 
+/* First-load Finance Club intro. The dashboard renders and starts connecting
+   behind the fixed overlay; the final animation frame removes it from view. */
+@keyframes startupSplashReveal {
+  0%, 48% { opacity: 1; visibility: visible; }
+  99% { opacity: 0; visibility: visible; }
+  100% { opacity: 0; visibility: hidden; }
+}
+
+@keyframes startupSplashContent {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+#startup-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 44%, #fff 0%, #f8f9fb 54%, #edf1f6 100%);
+  color: #05345a;
+  pointer-events: none;
+  animation: startupSplashReveal 3.4s ease-in-out forwards;
+}
+
+#startup-splash::before,
+#startup-splash::after {
+  content: '';
+  position: absolute;
+  width: min(62vw, 700px);
+  height: min(62vw, 700px);
+  border: 1px solid rgba(5, 52, 90, 0.055);
+  border-radius: 50%;
+}
+
+#startup-splash::after {
+  width: min(86vw, 980px);
+  height: min(86vw, 980px);
+  border-color: rgba(176, 0, 52, 0.045);
+}
+
+.startup-splash-content {
+  position: relative;
+  z-index: 1;
+  width: min(84vw, 620px);
+  text-align: center;
+  animation: startupSplashContent 0.85s ease-out both;
+}
+
+.startup-splash-eyebrow {
+  color: #7d8997;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+}
+
+.startup-splash-logo-frame {
+  position: relative;
+  width: 100%;
+  height: clamp(130px, 31vw, 230px);
+  overflow: hidden;
+}
+
+.startup-splash-logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: none;
+  transform: translate(-50%, -50%);
+}
+
+.startup-splash-rule {
+  width: 36px;
+  height: 2px;
+  margin: 0 auto 20px;
+  background: #b00034;
+}
+
+.startup-splash-caption {
+  color: #526577;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #startup-splash { display: none; animation: none; }
+  .startup-splash-content { animation: none; }
+}
+
 /* Keyboard-hint tooltip shown briefly on first load */
 @keyframes hintFade {
   0%   { opacity: 0; }
