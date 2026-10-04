@@ -147,7 +147,11 @@ def register(app):
                 return {}, f'connecting:{connection_attempt()}'
             return {}, real
         _EVER_CONNECTED = True
-        df = process_positions(raw['positions'], raw.get('market_data', {}))
+        df = process_positions(
+            raw['positions'], raw.get('market_data', {}),
+            base_currency=raw.get('account', {}).get('base_currency', 'EUR'),
+            daily_fx_rates=raw.get('daily_fx_rates', {}),
+        )
         if df.empty:
             return {}, 'no_positions'
         summary = get_summary(df)

@@ -216,6 +216,7 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
 
     positions = []
     for ticker, conid, qty, avg, cur, mv, pnl in _POSITION_SETS[portfolio_id]:
+        currency = 'EUR' if ticker in ('ASML', 'VWCE') else 'USD'
         positions.append({
             'ticker':         ticker,
             'conId':          conid,
@@ -226,6 +227,10 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
             'unrealized_pnl': round(pnl, 2),
             'realized_pnl':   0.0,
             'price_stale':    False,
+            'currency':       currency,
+            'multiplier':     1.0,
+            'price_unit_verified': True,
+            'fx_native_price': round(cur, 2),
         })
 
     overlay  = _ACCOUNT_OVERLAYS[portfolio_id]
@@ -235,6 +240,7 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
 
     account = {
         'base_currency':        'EUR',
+        'portfolio_value_units': 'base',
         'cash_usd':             overlay['cash_usd'],
         'cash_base':            cash_eur,
         'buying_power':         round(net_liq * 1.9, 2),
@@ -260,6 +266,8 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     return {
         'positions':   positions,
         'market_data': market_data,
+        # Demo-only spot and previous daily midpoint, both EUR per USD.
+        'daily_fx_rates': {'USD': {'now': 1 / 1.08, 'previous': 1 / 1.075}},
         'div_data':    _div_entries(portfolio_id),
         'trades':      _trade_entries(portfolio_id),
         'account':     account,

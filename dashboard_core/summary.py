@@ -64,6 +64,7 @@ def register(app):
         rate      = a.get('eurusd_rate', EURUSD_FALLBACK)
         base_ccy  = a.get('base_currency', 'EUR')
         sym       = ccy_symbol(base_ccy)
+        portfolio_values_base = a.get('portfolio_value_units') == 'base'
 
         # Secondary currency is USD when base≠USD, otherwise EUR.
         sec_ccy   = 'USD' if base_ccy != 'USD' else 'EUR'
@@ -79,13 +80,17 @@ def register(app):
             """Convert a base-currency value to the secondary display currency."""
             if base_ccy == 'USD':
                 return base_val / rate if rate else base_val   # USD → EUR
-            return base_val * rate                             # EUR → USD
+            if base_ccy == 'EUR':
+                return base_val * rate                         # EUR → USD
+            return None
 
-        def card(label, base_val, pnl_pct=None, is_pnl=False, note=None):
+        def card(label, base_val, pnl_pct=None, is_pnl=False, note=None, verified_base=True):
             positive = base_val >= 0
             accent   = (COLOR_GOOD if positive else COLOR_BAD) if is_pnl else COLOR_TEXT_STRONG
-            val_str  = f"{sym}{base_val:+,.2f}" if is_pnl else f"{sym}{base_val:,.2f}"
-            sec_str  = f"{sec_sym}{_to_sec(base_val):,.2f}"
+            prefix = sym if verified_base else ''
+            val_str  = f"{prefix}{base_val:+,.2f}" if is_pnl else f"{prefix}{base_val:,.2f}"
+            secondary = _to_sec(base_val) if verified_base else None
+            sec_str = f"{sec_sym}{secondary:,.2f}" if secondary is not None else ''
             return html.Div([
                 html.P(label, style={
                     'fontSize': '14px', 'color': COLOR_TEXT_FAINT, 'margin': '0 0 10px',
@@ -96,7 +101,7 @@ def register(app):
                     'color': accent if is_pnl else COLOR_TEXT_STRONG, 'letterSpacing': '-0.5px',
                 }),
                 html.Div([
-                    html.Span(sec_str, style={'fontSize': '14px', 'color': COLOR_TEXT_FAINT}),
+                    html.Span(sec_str, style={'fontSize': '14px', 'color': COLOR_TEXT_FAINT}) if sec_str else None,
                     html.Span(f" · {pnl_pct:+.2f}%",
                               style={'fontSize': '14px', 'color': accent}) if pnl_pct is not None else None,
                     html.Span(f" · {note}",
@@ -107,12 +112,15 @@ def register(app):
                 'borderLeft': f'3px solid {accent if is_pnl else COLOR_BORDER}',
             })
 
-        total_base = to_base(total_val, rate, base_ccy)
-        cash_pct   = round(cash_base / total_base * 100, 1) if total_base else None
+        # Demo values are base; live PortfolioItem units are unverified.
+        total_base = total_val
+        cash_pct   = round(cash_base / total_base * 100, 1) if total_base and portfolio_values_base else None
         return [
-            card("Total Value",    total_base),
-            card("Unrealized P&L", to_base(unreal_pnl, rate, base_ccy), pnl_pct=pnl_pct, is_pnl=True),
-            card("Today's P&L",    to_base(daily_pnl, rate, base_ccy) if daily_pnl is not None else 0, is_pnl=True),
+            card("Total Value" if portfolio_values_base else "Positions value (TWS units)",
+                 total_base, verified_base=portfolio_values_base),
+            card("Unrealized P&L" if portfolio_values_base else "Unrealized P&L (TWS units)",
+                 unreal_pnl, pnl_pct=pnl_pct, is_pnl=True, verified_base=portfolio_values_base),
+            card("Today's P&L",    daily_pnl if daily_pnl is not None else 0, is_pnl=True),
             card("Cash",           cash_base, note=f"{cash_pct:.1f}% of portfolio" if cash_pct is not None else None),
         ]
 
@@ -137,9 +145,8 @@ def register(app):
                             style={'padding': '4px 0'}), '', None
         df       = pd.DataFrame(data['positions'])
         acct     = data.get('account', {})
-        rate     = acct.get('eurusd_rate', EURUSD_FALLBACK)
         base_ccy = acct.get('base_currency', 'EUR')
-        sym      = ccy_symbol(base_ccy)
+        values_base = acct.get('portfolio_value_units') == 'base'
 
         count = f"{len(df)} positions"
         any_stale = df.get('price_stale', pd.Series(False)).any()
@@ -153,39 +160,63 @@ def register(app):
                                 }) if any_stale else None
 
         # Pre-format display columns
-        df['price_display'] = df.apply(
-            lambda r: f"~${r['current_price']:,.2f}" if r.get('price_stale') else f"${r['current_price']:,.2f}",
-            axis=1
-        )
-        df['value_base_display'] = df['market_value'].apply(
-            lambda v: f"{sym}{to_base(v, rate, base_ccy):,.0f}"
-        )
+        def _price_display(row):
+            quote = row.get('fx_native_price')
+            if row.get('price_unit_verified') and pd.notna(quote):
+                return f"{ccy_symbol(row.get('currency') or '')}{quote:,.2f}"
+            return f"~{row['current_price']:,.2f}"
+
+        df['price_display'] = df.apply(_price_display, axis=1)
         df['weight_display']    = df['allocation_pct'].apply(lambda v: f"{v:.1f}%")
         df['pnl_pct_display']   = df['pnl_pct'].apply(lambda v: f"{v:+.2f}%")
 
-        table_data = df[[
+        table_frame = df[[
             'ticker', 'quantity', 'avg_cost', 'price_display',
-            'market_value', 'value_base_display', 'pnl_pct', 'pnl_pct_display',
-            'unrealized_pnl', 'weight_display',
-        ]].to_dict('records')
+            'market_value', 'pnl_pct', 'pnl_pct_display',
+            'unrealized_pnl', 'fx_today', 'weight_display',
+        ]].astype(object)
+        table_data = table_frame.where(pd.notna(table_frame), None).to_dict('records')
+
+        tooltip_data = [{
+            'fx_today': {
+                'value': row.get('fx_today_reason') or
+                         'Current position exposure × (current FX rate − previous FX daily close)',
+                'type': 'text',
+            }
+        } for _, row in df.iterrows()]
 
         table = dash_table.DataTable(
             id='holdings-datatable',
             columns=[
                 {'name': 'Ticker',   'id': 'ticker',           'type': 'text'},
                 {'name': 'Qty',      'id': 'quantity',          'type': 'numeric'},
-                {'name': 'Avg Cost', 'id': 'avg_cost',          'type': 'numeric',
-                 'format': {'specifier': '$,.2f'}},
+                {'name': 'Avg Cost (native)' if values_base else 'Avg Cost (TWS units)',
+                 'id': 'avg_cost', 'type': 'numeric',
+                 'format': {'specifier': ',.2f'}},
                 {'name': 'Price',    'id': 'price_display',     'type': 'text'},
-                {'name': 'Value ($)', 'id': 'market_value',     'type': 'numeric',
-                 'format': {'specifier': '$,.0f'}},
-                {'name': f'Value ({sym.strip()})', 'id': 'value_base_display', 'type': 'text'},
+                {'name': f'Value ({base_ccy})' if values_base else 'Value (TWS units)',
+                 'id': 'market_value', 'type': 'numeric',
+                 'format': {'specifier': ',.0f'}},
                 {'name': 'P&L %',   'id': 'pnl_pct_display',    'type': 'text'},
-                {'name': 'P&L ($)', 'id': 'unrealized_pnl',    'type': 'numeric',
-                 'format': {'specifier': '+$,.2f'}},
+                {'name': f'P&L ({base_ccy})' if values_base else 'P&L (TWS units)',
+                 'id': 'unrealized_pnl', 'type': 'numeric',
+                 'format': {'specifier': '+,.2f'}},
+                {'name': f'FX today ({base_ccy})', 'id': 'fx_today', 'type': 'numeric',
+                 'format': {'specifier': '+,.2f', 'nully': '—'}},
                 {'name': 'Weight',  'id': 'weight_display',     'type': 'text'},
             ],
             data=table_data,
+            tooltip_header={'fx_today': (
+                'Estimated effect of today’s FX move on the current position, in account base currency. '
+                'Current native price × quantity × multiplier × (FX now − previous FX daily close). '
+                'The price/FX cross-term is assigned to FX. — means a current price, verified price units, '
+                'or a fresh current/previous FX rate is unavailable. This is not since-purchase attribution.'
+            ), 'price_display': (
+                'Fresh contract quote in the instrument currency when available; '
+                '~ indicates the cached TWS portfolio price, whose units or freshness are unverified.'
+            )},
+            tooltip_data=tooltip_data,
+            tooltip_duration=None,
             sort_action='native',
             sort_by=[{'column_id': 'market_value', 'direction': 'desc'}],
             page_size=50,
@@ -208,7 +239,7 @@ def register(app):
                 [{'if': {'column_id': 'ticker'}, 'fontWeight': '600', 'textAlign': 'left'}] +
                 [{'if': {'column_id': c}, 'textAlign': 'right'}
                  for c in ['quantity', 'avg_cost', 'price_display', 'market_value',
-                           'value_base_display', 'pnl_pct_display', 'unrealized_pnl', 'weight_display']]
+                           'pnl_pct_display', 'unrealized_pnl', 'fx_today', 'weight_display']]
             ),
             style_data_conditional=[
                 {'if': {'filter_query': '{pnl_pct} >= 0', 'column_id': 'pnl_pct_display'},
@@ -218,6 +249,10 @@ def register(app):
                 {'if': {'filter_query': '{unrealized_pnl} >= 0', 'column_id': 'unrealized_pnl'},
                  'color': COLOR_GOOD},
                 {'if': {'filter_query': '{unrealized_pnl} < 0', 'column_id': 'unrealized_pnl'},
+                 'color': COLOR_BAD},
+                {'if': {'filter_query': '{fx_today} >= 0', 'column_id': 'fx_today'},
+                 'color': COLOR_GOOD},
+                {'if': {'filter_query': '{fx_today} < 0', 'column_id': 'fx_today'},
                  'color': COLOR_BAD},
     {'if': {'filter_query': '{price_display} contains "~"', 'column_id': 'price_display'},
                  'color': COLOR_WARN},
@@ -247,10 +282,13 @@ def register(app):
         colors = [COLOR_BRAND, COLOR_WARN_SOFT, '#a855f7', COLOR_GOOD_SOFT, COLOR_WARN_YELLOW, '#ec4899', '#14b8a6']
         fig = px.pie(df, values='market_value', names='ticker', hole=0.68,
                      color_discrete_sequence=colors)
+        account = data.get('account', {})
+        base_ccy = account.get('base_currency', 'EUR')
+        value_units = base_ccy if account.get('portfolio_value_units') == 'base' else 'TWS units'
         fig.update_traces(
             textposition='none',
             textinfo='none',
-            hovertemplate='<b>%{label}</b><br>$%{value:,.2f}  ·  %{percent}<extra></extra>',
+            hovertemplate=f'<b>%{{label}}</b><br>%{{value:,.2f}} {value_units}  ·  %{{percent}}<extra></extra>',
         )
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0),

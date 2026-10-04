@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+from fx_impact import daily_fx_impact
 
-def process_positions(positions, market_data=None):
+
+def process_positions(positions, market_data=None, *, base_currency='EUR', daily_fx_rates=None):
     if not positions:
         return pd.DataFrame()
 
@@ -85,6 +87,11 @@ def process_positions(positions, market_data=None):
     df['range_52w_pct'] = range_pct_list
     df['volume'] = volumes
     df['vwap'] = vwaps
+
+    fx = [daily_fx_impact(row.to_dict(), base_currency, daily_fx_rates or {})
+          for _, row in df.iterrows()]
+    df['fx_today'] = [value for value, _ in fx]
+    df['fx_today_reason'] = [reason for _, reason in fx]
 
     df = df.sort_values('market_value', ascending=False).reset_index(drop=True)
     return df

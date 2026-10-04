@@ -57,6 +57,7 @@ def register(app):
         rate     = a.get('eurusd_rate', EURUSD_FALLBACK)
         base_ccy = a.get('base_currency', 'EUR')
         sym      = ccy_symbol(base_ccy)
+        values_base = a.get('portfolio_value_units') == 'base'
         sec_ccy  = 'USD' if base_ccy != 'USD' else 'EUR'
         sec_sym  = ccy_symbol(sec_ccy)
 
@@ -109,20 +110,24 @@ def register(app):
         unreal_pnl  = s.get('total_unrealized_pnl', 0)
         real_pnl    = s.get('total_realized_pnl', 0) or 0
         daily_pnl   = a.get('daily_pnl') or s.get('total_daily_pnl', 0) or 0
-        def _base(v):
-            return f"{sym}{to_base(v, rate, base_ccy):,.2f}"
-        def _base_signed(v):
-            return f"{sym}{to_base(v, rate, base_ccy):+,.2f}"
+        def _base(v, verified=values_base):
+            return f"{sym if verified else ''}{v:,.2f}"
+        def _base_signed(v, verified=values_base):
+            return f"{sym if verified else ''}{v:+,.2f}"
         def _sec(v):
+            if not values_base or base_ccy not in ('USD', 'EUR'):
+                return '—'
             sec_val = v / rate if base_ccy == 'USD' else v * rate
             return f"{sec_sym}{sec_val:,.2f}"
 
         summary_data = [
-            ['Metric', base_ccy, sec_ccy],
+            ['Metric', base_ccy if values_base else 'TWS units', sec_ccy if values_base else '—'],
             ['Total Value',    _base(total_val),         _sec(total_val)],
             ['Unrealized P&L', _base_signed(unreal_pnl), _sec(unreal_pnl)],
             ['Realized P&L',   _base_signed(real_pnl),   _sec(real_pnl)],
-            ["Today's P&L",    _base_signed(daily_pnl),  _sec(daily_pnl)],
+            ["Today's P&L",    _base_signed(daily_pnl, verified=True),
+                              f"{sec_sym}{daily_pnl / rate if base_ccy == 'USD' else daily_pnl * rate:,.2f}"
+                              if base_ccy in ('EUR', 'USD') and rate else '—'],
             ['Cash',           f"{sym}{a.get('cash_base', 0):,.2f}",
                                f"${a.get('cash_usd', 0) or 0:,.2f}"],
         ]
@@ -195,17 +200,19 @@ def register(app):
 
         # ── Holdings ──────────────────────────────────────────────────────────
         section_header("Holdings")
-        hold_data = [['Ticker', 'Qty', 'Avg Cost', 'Price', 'Day %', 'Mkt Value', 'P&L %', 'Weight']]
+        hold_data = [['Ticker', 'Qty', 'Avg Cost', 'Price', 'Day %',
+                      f'Value ({base_ccy})' if values_base else 'Value (TWS)', 'P&L %', 'Weight']]
         for _, row in df.iterrows():
             day_pct = row.get('daily_change_pct')
             day_str = f"{day_pct:+.2f}%" if pd.notna(day_pct) and day_pct is not None else '—'
             hold_data.append([
                 row['ticker'],
                 str(int(row['quantity'])),
-                f"${row['avg_cost']:,.2f}",
-                f"${row['current_price']:,.2f}",
+                f"{ccy_symbol(row.get('currency') or '') if values_base else ''}{row['avg_cost']:,.2f}",
+                (f"{ccy_symbol(row.get('currency') or '')}{row['fx_native_price']:,.2f}"
+                 if pd.notna(row.get('fx_native_price')) else f"~{row['current_price']:,.2f}"),
                 day_str,
-                f"${row['market_value']:,.2f}",
+                f"{sym if values_base else ''}{row['market_value']:,.2f}",
                 f"{row['pnl_pct']:+.2f}%",
                 f"{row['allocation_pct']:.1f}%",
             ])

@@ -54,6 +54,37 @@ Each installer creates a desktop shortcut so double-clicking starts the dashboar
 - **Portfolio Coach** — chat panel with 5 rules-based scenarios out of the box; optionally paste an Anthropic / xAI / OpenAI key for free-form chat
 - **PDF export**, **auto-reconnect**, **demo mode** — see [docs/DEMO.md](docs/DEMO.md)
 
+## Daily FX impact in Holdings
+**FX today (<account base currency>)** estimates the currency translation
+effect on each current position: `quantity × contract multiplier × current
+native price × (FX now − previous FX daily close)`. Both FX rates are expressed
+as account-base units per unit of the instrument currency. The current price
+allocates the price/FX cross-term to FX. This is a daily estimate, not IBKR's
+P&L reset or a since-purchase attribution; the latter would need acquisition
+FX rates and lot history.
+
+The live path uses the TWS/`ib_async` portfolio contract currency and supports
+stock/ETF (`STK`) price units. It uses a fresh native-currency quote for the
+same qualified contract, rather than trusting the units of the portfolio's
+`marketPrice` field. It requires a fresh real-time position snapshot,
+a fresh real-time IDEALPRO FX quote, and a prior completed daily FX midpoint
+bar. A direct or inverse currency pair is accepted. Same-currency positions
+show zero. Missing, delayed, stale, or unsupported inputs show an em dash with
+the reason on hover. The configured EURUSD fallback is only for the older
+display conversion and is never used for this attribution.
+Weekend and daily FX rollover snapshots are treated as unavailable.
+
+There is no verified live multicurrency TWS fixture in this checkout. In
+particular, TWS `PortfolioItem` does not carry an explicit currency for its
+market-value/P&L fields, and the TWS display may be configured to show native
+or base values. Live raw value/P&L labels therefore say “TWS units”; demo
+values are explicitly EUR. Validate a live account's TWS value units before
+using raw value/P&L totals as base-currency amounts.
+
+IBKR references: [TWS Portfolio Values](https://www.ibkrguides.com/traderworkstation/portfolio-values.htm),
+[TWS API PortfolioValue](https://www.interactivebrokers.com/docs/tws-api/protobuf/portfolio-value),
+and [historical daily bars](https://interactivebrokers.github.io/tws-api/historical_bars.html).
+
 ## Configuration
 
 All settings can be set via `config.yaml` **or** environment variables (env wins).

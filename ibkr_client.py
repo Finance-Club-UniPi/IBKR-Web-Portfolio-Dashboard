@@ -29,10 +29,12 @@ import concurrent.futures
 import logging
 import threading
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from ib_async import IB, ExecutionFilter, Forex
 
 from config import cfg
+from fx_impact import fx_session_open, fresh_quote_time, previous_daily_close, quote_to_base, valid_positive
 
 log = logging.getLogger(__name__)
 
@@ -302,6 +304,11 @@ class _IBKRConnection:
                 'unrealized_pnl': round(item.unrealizedPNL, 2),
                 'realized_pnl':   round(item.realizedPNL, 2),
                 'price_stale':    price_stale,
+                'currency':       (item.contract.currency or '').upper(),
+                # The FX estimate uses a fresh contract quote below; we do not
+                # infer native price units from PortfolioItem.marketPrice.
+                'multiplier':     1.0 if item.contract.secType == 'STK' else None,
+                'price_unit_verified': False,
             })
             contracts.append(item.contract)
 
@@ -327,6 +334,9 @@ class _IBKRConnection:
 
         account = {
             'base_currency':        base_ccy,
+            # TWS PortfolioItem does not identify the units of marketValue /
+            # P&L, and the TWS display can be configured for base values.
+            'portfolio_value_units': 'unverified',
             'cash_usd':             get_av('CashBalance',        'USD'),
             'cash_base':            get_av('TotalCashValue',      base_ccy),
             'buying_power':         get_av('BuyingPower',         base_ccy),
@@ -347,7 +357,7 @@ class _IBKRConnection:
         if not contracts:
             account['daily_pnl'] = 0.0
             return {'positions': positions, 'market_data': {}, 'div_data': {},
-                    'trades': [], 'account': account}
+                    'daily_fx_rates': {}, 'trades': [], 'account': account}
 
         # Request delayed market data type once (sync, fast) before parallel fetches
         try:
@@ -408,7 +418,7 @@ class _IBKRConnection:
                 log.warning("Dividend data fetch failed: %s", e)
                 return {}, {}
 
-        # Chain C: EUR/USD live rate
+        # Chain C: EUR/USD display rate, separate from attribution rates.
         async def _fetch_fx():
             try:
                 eurusd = Forex('EURUSD')
@@ -422,6 +432,49 @@ class _IBKRConnection:
                 log.warning("EUR/USD rate fetch failed, using fallback %.4f: %s",
                             cfg['display']['eurusd_fallback'], e)
             return None
+
+        async def _fetch_daily_fx():
+            """Fetch fresh spot and prior completed daily midpoint for each currency.
+
+            Try direct and inverse IDEALPRO contracts; failures yield no estimate.
+            The configured EURUSD display fallback never enters this path.
+            """
+            result = {}
+            if not fx_session_open():
+                return result
+            currencies = {p['currency'] for p in positions if p['currency'] and p['currency'] != base_ccy}
+            today = datetime.now(ZoneInfo('America/New_York')).date()
+
+            async def one_currency(currency):
+                for pair, inverted in ((currency + base_ccy, False),
+                                       (base_ccy + currency, True)):
+                    try:
+                        contract = Forex(pair)
+                        if not await ib.qualifyContractsAsync(contract):
+                            continue
+                        [ticker] = await ib.reqTickersAsync(contract)
+                        # A delayed/frozen quote or an undated snapshot cannot
+                        # establish today's translation effect.
+                        if ticker.marketDataType != 1 or not fresh_quote_time(ticker.time):
+                            continue
+                        now_rate = ticker.marketPrice()
+                        if not valid_positive(now_rate):
+                            continue
+                        bars = await ib.reqHistoricalDataAsync(
+                            contract, endDateTime='', durationStr='10 D',
+                            barSizeSetting='1 day', whatToShow='MIDPOINT',
+                            useRTH=False, timeout=8,
+                        )
+                        prev_rate = previous_daily_close(bars, today)
+                        normalized = quote_to_base(now_rate, prev_rate, inverted=inverted)
+                        if normalized:
+                            result[currency] = normalized
+                            return
+                    except Exception as e:
+                        log.debug('FX attribution quote %s unavailable: %s', pair, e)
+
+            await asyncio.gather(*(one_currency(ccy) for ccy in currencies))
+            return result
 
         # Chain E: recent trade executions (IBKR server caps history at ~7 days)
         async def _fetch_trades():
@@ -469,10 +522,11 @@ class _IBKRConnection:
                 log.warning("Daily P&L fetch failed: %s", e)
                 return 0.0
 
-        raw_tickers, (div_data, range_data), fx_rate, daily_pnl, trades = await asyncio.gather(
+        raw_tickers, (div_data, range_data), fx_rate, daily_fx_rates, daily_pnl, trades = await asyncio.gather(
             _fetch_tickers(),
             _fetch_dividends(),
             _fetch_fx(),
+            _fetch_daily_fx(),
             _fetch_pnl(),
             _fetch_trades(),
         )
@@ -495,6 +549,21 @@ class _IBKRConnection:
                     'vwap':       safe(t.vwap),
                 }
 
+        # PortfolioItem has no quote timestamp. Require a fresh, real-time
+        # snapshot of the same contract before using its price for attribution.
+        snapshots = {t.contract.conId: t for t in raw_tickers if t.contract and t.contract.conId}
+        for p in positions:
+            t = snapshots.get(p['conId'])
+            quote_valid = (
+                t is not None and t.contract.secType == 'STK'
+                and (t.contract.currency or '').upper() == p['currency']
+                and t.marketDataType == 1 and fresh_quote_time(t.time)
+                and valid_positive(t.marketPrice())
+            )
+            p['price_unit_verified'] = bool(quote_valid)
+            p['fx_price_stale'] = not quote_valid
+            p['fx_native_price'] = float(t.marketPrice()) if quote_valid else None
+
         # Merge 52-week range from the generic-tick subscription (tick 165).
         # reqTickersAsync snapshots often don't carry low52week/high52week;
         # the dedicated reqMktData subscription above is the reliable source.
@@ -512,6 +581,7 @@ class _IBKRConnection:
         return {
             'positions':   positions,
             'market_data': market_data,
+            'daily_fx_rates': daily_fx_rates,
             'div_data':    div_data if isinstance(div_data, dict) else {},
             'trades':      trades if isinstance(trades, list) else [],
             'account':     account,

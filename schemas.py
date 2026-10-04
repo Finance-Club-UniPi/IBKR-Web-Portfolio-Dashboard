@@ -19,6 +19,13 @@ class PositionData(TypedDict):
     unrealized_pnl: float
     pnl_pct: float
     allocation_pct: float
+    currency: NotRequired[str]
+    multiplier: NotRequired[float | None]
+    price_unit_verified: NotRequired[bool]
+    fx_native_price: NotRequired[float | None]
+    fx_price_stale: NotRequired[bool]
+    fx_today: NotRequired[float | None]
+    fx_today_reason: NotRequired[str]
     price_stale: NotRequired[bool]
     daily_change: NotRequired[float | None]
     daily_change_pct: NotRequired[float | None]
@@ -41,6 +48,8 @@ class SummaryData(TypedDict):
 
 
 class AccountData(TypedDict, total=False):
+    base_currency: str
+    portfolio_value_units: str
     cash_eur: float
     net_liquidation: float
     gross_position_value: float
