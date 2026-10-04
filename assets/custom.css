@@ -193,6 +193,39 @@
   animation: toastFadeOut 3.5s ease forwards;
 }
 
+/* Finance Club UniPi wordmark in the dashboard header. The supplied PNG has
+   transparent canvas around the artwork; the frame clips that empty space
+   while keeping the original logo pixels untouched. */
+.header-brand-area {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.header-title-area { min-width: 0; }
+
+.finance-club-logo {
+  position: relative;
+  display: block;
+  flex: 0 0 132px;
+  width: 132px;
+  height: 54px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.finance-club-logo img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 175px;
+  height: 175px;
+  max-width: none;
+  transform: translate(-50%, -50%);
+}
+
 /* Keyboard-hint tooltip shown briefly on first load */
 @keyframes hintFade {
   0%   { opacity: 0; }

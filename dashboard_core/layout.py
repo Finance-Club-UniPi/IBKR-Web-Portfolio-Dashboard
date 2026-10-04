@@ -29,12 +29,21 @@ def build_layout(refresh_ms: int) -> html.Div:
         html.Div([
             html.Div([
                 html.Div([
+                    html.Div(
+                        html.Img(
+                            src='/assets/finance-club-logo.png',
+                            alt='Finance Club UniPi',
+                        ),
+                        className='finance-club-logo',
+                    ),
                     html.Div([
-                        html.H1(id='portfolio-title', style={'margin': '0', 'fontSize': '22px', 'fontWeight': '600', 'color': COLOR_TEXT_STRONG}),
-                        html.Div(id='demo-portfolio-switcher', style={'display': 'none'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '12px', 'flexWrap': 'wrap'}),
-                    html.P(id='last-updated', style={'margin': '4px 0 0', 'color': COLOR_TEXT_MUTED, 'fontSize': '14px'}),
-                ]),
+                        html.Div([
+                            html.H1(id='portfolio-title', style={'margin': '0', 'fontSize': '22px', 'fontWeight': '600', 'color': COLOR_TEXT_STRONG}),
+                            html.Div(id='demo-portfolio-switcher', style={'display': 'none'}),
+                        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '12px', 'flexWrap': 'wrap'}),
+                        html.P(id='last-updated', style={'margin': '4px 0 0', 'color': COLOR_TEXT_MUTED, 'fontSize': '14px'}),
+                    ], className='header-title-area'),
+                ], className='header-brand-area'),
                 html.Div([
                     html.Div(id='connection-badge'),
                     html.Div(
@@ -61,8 +70,13 @@ def build_layout(refresh_ms: int) -> html.Div:
                         'padding': '4px 10px', 'cursor': 'pointer', 'lineHeight': '1',
                         'color': COLOR_TEXT_STRONG,
                     }),
-                ], id='header-actions', style={'display': 'flex', 'alignItems': 'center', 'gap': '12px'}),
-            ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'flex-start'}),
+                ], id='header-actions', style={
+                    'display': 'flex', 'alignItems': 'center', 'gap': '12px', 'flexWrap': 'wrap',
+                }),
+            ], style={
+                'display': 'flex', 'justifyContent': 'space-between',
+                'alignItems': 'flex-start', 'flexWrap': 'wrap', 'gap': '14px',
+            }),
         ], id='sticky-header', style={
             'position': 'sticky', 'top': '0', 'zIndex': '100',
             'backgroundColor': COLOR_SURFACE_WHITE,
