@@ -26,6 +26,13 @@ class PositionData(TypedDict):
     fx_price_stale: NotRequired[bool]
     fx_today: NotRequired[float | None]
     fx_today_reason: NotRequired[str]
+    fx_total: NotRequired[float | None]
+    fx_total_reason: NotRequired[str]
+    fx_total_source: NotRequired[str | None]
+    base_market_value: NotRequired[float]
+    base_unrealized_pnl: NotRequired[float]
+    beta: NotRequired[float | None]
+    realized_pnl: NotRequired[float]
     price_stale: NotRequired[bool]
     daily_change: NotRequired[float | None]
     daily_change_pct: NotRequired[float | None]
@@ -45,6 +52,14 @@ class SummaryData(TypedDict):
     worst_performer: str
     total_pnl_pct: NotRequired[float | None]
     total_daily_pnl: NotRequired[float | None]
+    total_realized_pnl: NotRequired[float]
+    total_fx_today: NotRequired[float | None]
+    fx_covered: NotRequired[int]
+    total_fx_total: NotRequired[float | None]
+    fx_total_covered: NotRequired[int]
+    portfolio_beta: NotRequired[float | None]
+    beta_coverage_pct: NotRequired[float]
+    beta_covered: NotRequired[int]
 
 
 class AccountData(TypedDict, total=False):

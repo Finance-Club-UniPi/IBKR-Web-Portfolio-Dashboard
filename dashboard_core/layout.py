@@ -5,6 +5,7 @@ from __future__ import annotations
 from dash import dcc, html
 
 from dashboard_core.helpers import section_label
+from dashboard_core.performance import performance_card
 from styles import (
     CARD,
     COLOR_BAD,
@@ -129,11 +130,14 @@ def build_layout(refresh_ms: int) -> html.Div:
         # All portfolio content — hidden entirely when disconnected
         html.Div([
 
-            # 4 summary cards
+            # 8 summary cards (wrap 4 + 4)
             html.Div(id='summary-cards', style={
                 'display': 'grid', 'gridTemplateColumns': 'repeat(4, 1fr)',
                 'gap': '14px', 'marginBottom': '24px',
             }),
+
+            # Portfolio performance chart (value / % return + comparison)
+            performance_card(),
 
             # Holdings + Donut
             html.Div([

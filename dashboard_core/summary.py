@@ -84,13 +84,19 @@ def register(app):
                 return base_val * rate                         # EUR → USD
             return None
 
-        def card(label, base_val, pnl_pct=None, is_pnl=False, note=None, verified_base=True):
-            positive = base_val >= 0
-            accent   = (COLOR_GOOD if positive else COLOR_BAD) if is_pnl else COLOR_TEXT_STRONG
+        def card(label, base_val, pnl_pct=None, is_pnl=False, note=None, verified_base=True,
+                 value_text=None, title=None):
+            """`value_text` replaces the formatted amount (e.g. a beta or '—')."""
+            positive = base_val is not None and base_val >= 0
+            accent   = (COLOR_GOOD if positive else COLOR_BAD) if is_pnl and base_val is not None \
+                       else COLOR_TEXT_STRONG
             prefix = sym if verified_base else ''
-            val_str  = f"{prefix}{base_val:+,.2f}" if is_pnl else f"{prefix}{base_val:,.2f}"
-            secondary = _to_sec(base_val) if verified_base else None
-            sec_str = f"{sec_sym}{secondary:,.2f}" if secondary is not None else ''
+            if value_text is not None:
+                val_str = value_text
+            else:
+                val_str = f"{prefix}{base_val:+,.2f}" if is_pnl else f"{prefix}{base_val:,.2f}"
+            secondary = _to_sec(base_val) if verified_base and value_text is None else None
+            sec_str = f"{'-' if secondary < 0 else ''}{sec_sym}{abs(secondary):,.2f}" if secondary is not None else ''
             return html.Div([
                 html.P(label, style={
                     'fontSize': '14px', 'color': COLOR_TEXT_FAINT, 'margin': '0 0 10px',
@@ -107,21 +113,71 @@ def register(app):
                     html.Span(f" · {note}",
                               style={'fontSize': '14px', 'color': COLOR_TEXT_MUTED}) if note is not None else None,
                 ], style={'marginTop': '4px'}),
-            ], style={
+            ], title=title, style={
                 'background': COLOR_SURFACE_SOFT, 'borderRadius': '12px', 'padding': '18px',
                 'borderLeft': f'3px solid {accent if is_pnl else COLOR_BORDER}',
             })
 
         # Demo values are base; live PortfolioItem units are unverified.
         total_base = total_val
-        cash_pct   = round(cash_base / total_base * 100, 1) if total_base and portfolio_values_base else None
+        # Net liquidation (positions + cash + accruals) is IBKR's own account total
+        # in base currency.  The positions sum above is in instrument-currency
+        # units (e.g. USD) and excludes cash, so it never matches the broker app.
+        net_liq   = a.get('net_liquidation')
+        cash_pct   = round(cash_base / net_liq * 100, 1) if net_liq and net_liq > 0 else (
+            round(cash_base / total_base * 100, 1) if total_base and portfolio_values_base else None)
+
+        # Today's P&L as a share of yesterday's net liquidation value (IBKR's own
+        # base for the daily %, and always in account base currency).
+        prev_nlv  = net_liq - daily_pnl if net_liq and daily_pnl is not None else None
+        daily_pct = round(daily_pnl / prev_nlv * 100, 2) if prev_nlv and prev_nlv > 0 else None
+
+        gross_base   = a.get('gross_position_value') or 0
+        realized_pnl = s.get('total_realized_pnl') or 0
+        fx_total     = s.get('total_fx_today')
+        fx_n         = s.get('fx_covered', 0)
+        fx_all       = s.get('total_fx_total')
+        fx_all_n     = s.get('fx_total_covered', 0)
+        n_positions  = len(data.get('positions', []))
+        beta         = s.get('portfolio_beta')
+        beta_cov     = s.get('beta_coverage_pct', 0)
+
         return [
+            card("Net Liquidation", net_liq,
+                 note=f"{sym}{gross_base:,.0f} positions + cash",
+                 title="IBKR's account total in base currency: positions at market value + cash + "
+                       "accrued interest/dividends. Matches the figure in TWS / the IBKR app.")
+            if net_liq and net_liq > 0 else
             card("Total Value" if portfolio_values_base else "Positions value (TWS units)",
                  total_base, verified_base=portfolio_values_base),
             card("Unrealized P&L" if portfolio_values_base else "Unrealized P&L (TWS units)",
                  unreal_pnl, pnl_pct=pnl_pct, is_pnl=True, verified_base=portfolio_values_base),
-            card("Today's P&L",    daily_pnl if daily_pnl is not None else 0, is_pnl=True),
+            card("Today's P&L",    daily_pnl if daily_pnl is not None else 0, pnl_pct=daily_pct, is_pnl=True,
+                 title="Today's change as a percentage of yesterday's net liquidation value "
+                       "(current net liquidation minus today's P&L)."),
             card("Cash",           cash_base, note=f"{cash_pct:.1f}% of portfolio" if cash_pct is not None else None),
+            card("Realized P&L" if portfolio_values_base else "Realized P&L (TWS units)",
+                 realized_pnl, is_pnl=True, verified_base=portfolio_values_base,
+                 note="open positions",
+                 title="Profit already locked in on the positions you currently hold, as reported by "
+                       "IBKR. Positions that were fully closed no longer appear in the account "
+                       "portfolio and are not included."),
+            card("FX total", fx_all, is_pnl=fx_all is not None,
+                 value_text='—' if fx_all is None else None,
+                 note=f"{fx_all_n} of {n_positions} positions",
+                 title="Sum of the per-holding 'FX total' column: estimated effect of currency moves "
+                       "since you bought, in account base currency — from IBKR's base-currency P&L, or "
+                       "rebuilt from trade history when that is unavailable. The price/FX cross-term "
+                       "is assigned to FX."),
+            card("FX today", fx_total, is_pnl=fx_total is not None,
+                 value_text='—' if fx_total is None else None,
+                 note=f"{fx_n} of {n_positions} positions",
+                 title="Sum of the per-holding 'FX today' column: estimated effect of today's currency "
+                       "move on current exposure, in account base currency. Not since-purchase."),
+            card("Portfolio beta", beta, value_text='—' if beta is None else f"{beta:.2f}",
+                 note=f"{beta_cov:.0f}% of value covered" if beta is not None else None,
+                 title="Value-weighted beta vs the S&P 500 (Yahoo Finance) over holdings with a beta, "
+                       "excluding cash. Above 1 amplifies market moves; below 1 dampens them."),
         ]
 
     # ── Holdings ──────────────────────────────────────────────────────────────
@@ -169,15 +225,26 @@ def register(app):
         df['price_display'] = df.apply(_price_display, axis=1)
         df['weight_display']    = df['allocation_pct'].apply(lambda v: f"{v:.1f}%")
         df['pnl_pct_display']   = df['pnl_pct'].apply(lambda v: f"{v:+.2f}%")
+        for col in ('beta', 'fx_total'):
+            if col not in df.columns:
+                df[col] = None
 
         table_frame = df[[
             'ticker', 'quantity', 'avg_cost', 'price_display',
             'market_value', 'pnl_pct', 'pnl_pct_display',
-            'unrealized_pnl', 'fx_today', 'weight_display',
+            'unrealized_pnl', 'fx_total', 'fx_today', 'beta', 'weight_display',
         ]].astype(object)
         table_data = table_frame.where(pd.notna(table_frame), None).to_dict('records')
 
         tooltip_data = [{
+            'fx_total': {
+                'value': row.get('fx_total_reason') or (
+                    'Rebuilt from your trade history: Σ lot qty × price × (FX now − FX at purchase), '
+                    'purchase rates are Yahoo daily closes (approximate)'
+                    if row.get('fx_total_source') == 'trade history' else
+                    'Base-currency value − (price ÷ avg cost) × base-currency cost'),
+                'type': 'text',
+            },
             'fx_today': {
                 'value': row.get('fx_today_reason') or
                          'Current position exposure × (current FX rate − previous FX daily close)',
@@ -201,16 +268,31 @@ def register(app):
                 {'name': f'P&L ({base_ccy})' if values_base else 'P&L (TWS units)',
                  'id': 'unrealized_pnl', 'type': 'numeric',
                  'format': {'specifier': '+,.2f'}},
+                {'name': f'FX total ({base_ccy})', 'id': 'fx_total', 'type': 'numeric',
+                 'format': {'specifier': '+,.2f', 'nully': '—'}},
                 {'name': f'FX today ({base_ccy})', 'id': 'fx_today', 'type': 'numeric',
                  'format': {'specifier': '+,.2f', 'nully': '—'}},
+                {'name': 'Beta',    'id': 'beta', 'type': 'numeric',
+                 'format': {'specifier': '.2f', 'nully': '—'}},
                 {'name': 'Weight',  'id': 'weight_display',     'type': 'text'},
             ],
             data=table_data,
-            tooltip_header={'fx_today': (
+            tooltip_header={'fx_total': (
+                'Estimated effect of currency moves since purchase on this position, in account base '
+                'currency. IBKR’s base-currency P&L embeds the FX rate at purchase; the price move at that '
+                'rate is removed and the remainder is FX (the price/FX cross-term is assigned to FX). '
+                'When TWS reports base P&L in instrument-currency units, it is instead rebuilt from live + '
+                'uploaded trade history (FIFO lots × Yahoo daily FX closes on each purchase date), which is '
+                'approximate. — means neither source is available; hover a cell for the reason.'
+            ), 'fx_today': (
                 'Estimated effect of today’s FX move on the current position, in account base currency. '
                 'Current native price × quantity × multiplier × (FX now − previous FX daily close). '
                 'The price/FX cross-term is assigned to FX. — means a current price, verified price units, '
                 'or a fresh current/previous FX rate is unavailable. This is not since-purchase attribution.'
+            ), 'beta': (
+                'Sensitivity to the S&P 500 (Yahoo Finance, 5-year monthly; 3-year for some ETFs). '
+                '1.0 moves with the market, above 1 amplifies it, below 1 dampens it. '
+                '— means no beta is available for this ticker.'
             ), 'price_display': (
                 'Fresh contract quote in the instrument currency when available; '
                 '~ indicates the cached TWS portfolio price, whose units or freshness are unverified.'
@@ -239,7 +321,8 @@ def register(app):
                 [{'if': {'column_id': 'ticker'}, 'fontWeight': '600', 'textAlign': 'left'}] +
                 [{'if': {'column_id': c}, 'textAlign': 'right'}
                  for c in ['quantity', 'avg_cost', 'price_display', 'market_value',
-                           'pnl_pct_display', 'unrealized_pnl', 'fx_today', 'weight_display']]
+                           'pnl_pct_display', 'unrealized_pnl', 'fx_total', 'fx_today', 'beta',
+                           'weight_display']]
             ),
             style_data_conditional=[
                 {'if': {'filter_query': '{pnl_pct} >= 0', 'column_id': 'pnl_pct_display'},
@@ -249,6 +332,10 @@ def register(app):
                 {'if': {'filter_query': '{unrealized_pnl} >= 0', 'column_id': 'unrealized_pnl'},
                  'color': COLOR_GOOD},
                 {'if': {'filter_query': '{unrealized_pnl} < 0', 'column_id': 'unrealized_pnl'},
+                 'color': COLOR_BAD},
+                {'if': {'filter_query': '{fx_total} >= 0', 'column_id': 'fx_total'},
+                 'color': COLOR_GOOD},
+                {'if': {'filter_query': '{fx_total} < 0', 'column_id': 'fx_total'},
                  'color': COLOR_BAD},
                 {'if': {'filter_query': '{fx_today} >= 0', 'column_id': 'fx_today'},
                  'color': COLOR_GOOD},

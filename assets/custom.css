@@ -495,3 +495,60 @@
   visibility: visible;
   opacity: 1;
 }
+
+/* ── Performance chart controls ─────────────────────────────────────────── */
+.seg {
+  display: inline-flex;
+  gap: 4px;
+}
+.seg label {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--clr-text-mid);
+  border: 1px solid var(--clr-border-heavy);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.seg label:hover { color: var(--clr-text-strong); }
+.seg label:has(input:checked) {
+  background: #378ADD;
+  border-color: #378ADD;
+  color: #fff;
+}
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+
+/* ── Compare picker: keep a light surface with dark text in both themes ─────
+   The react-select menu/control stay white even in dark mode, so the page's
+   light text colour (inherited) made typed text and results unreadable. */
+#perf-compare,
+#perf-compare .Select-control,
+#perf-compare .Select-menu-outer,
+#perf-compare .Select-menu {
+  color: #111;
+}
+#perf-compare .Select-control,
+#perf-compare .Select-menu-outer {
+  background: #fff;
+}
+#perf-compare .Select-input > input {
+  color: #111 !important;
+  caret-color: #111;
+}
+#perf-compare .Select-placeholder { color: #777; }
+#perf-compare .Select-option {
+  background: #fff;
+  color: #111;
+}
+#perf-compare .Select-option.is-focused,
+#perf-compare .Select-option:hover {
+  background: #e8f1fb;
+  color: #111;
+}
+#perf-compare .Select-option.is-selected { background: #d6e6f8; color: #111; }
+#perf-compare .Select-noresults { color: #555; }
+#perf-compare .Select-arrow { border-top-color: #555; }

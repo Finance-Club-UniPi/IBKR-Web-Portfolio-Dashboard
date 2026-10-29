@@ -198,6 +198,17 @@ _ACCOUNT_OVERLAYS = {
     'growth':   {'cash_eur': 12_180.65,'cash_usd': 3_220.40, 'daily_pnl': -428.70},
 }
 
+# EUR/USD at which the demo's USD positions were bought (today's is ~1.08).
+_DEMO_COST_EURUSD = 1.12
+
+# Realized P&L (EUR) on still-open positions, matching the SELL fills in
+# `_trade_entries` (e.g. 10 TSLA sold at 222.10 vs a 250.00 cost basis).
+_DEMO_REALIZED = {
+    'balanced': {'TSLA': -258.35},
+    'income':   {},
+    'growth':   {'PLTR': 291.67},
+}
+
 _POSITION_SETS = {
     'balanced': _BALANCED_POSITIONS,
     'income':   _INCOME_POSITIONS,
@@ -217,6 +228,10 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     positions = []
     for ticker, conid, qty, avg, cur, mv, pnl in _POSITION_SETS[portfolio_id]:
         currency = 'EUR' if ticker in ('ASML', 'VWCE') else 'USD'
+        if currency == 'USD':
+            # USD names were bought at _DEMO_COST_EURUSD, so the base-currency
+            # P&L embeds the move to today's rate (see `daily_fx_rates` below).
+            pnl = mv - qty * avg / _DEMO_COST_EURUSD
         positions.append({
             'ticker':         ticker,
             'conId':          conid,
@@ -225,12 +240,14 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
             'current_price':  round(cur, 2),
             'market_value':   round(mv, 2),
             'unrealized_pnl': round(pnl, 2),
-            'realized_pnl':   0.0,
+            'realized_pnl':   _DEMO_REALIZED[portfolio_id].get(ticker, 0.0),
             'price_stale':    False,
             'currency':       currency,
             'multiplier':     1.0,
             'price_unit_verified': True,
             'fx_native_price': round(cur, 2),
+            'base_market_value':   round(mv, 2),
+            'base_unrealized_pnl': round(pnl, 2),
         })
 
     overlay  = _ACCOUNT_OVERLAYS[portfolio_id]

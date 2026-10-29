@@ -1,8 +1,9 @@
 """AI Coach panel — chat with optional LLM backend.
 
 Single unified panel shown below Holdings when the ✨ Ask button is clicked.
-Top section: 5 rules-based scenarios from coach.py — pure Python, no network.
-Bottom section: optional API key unlocks 6 deeper preset questions + a
+Top section: 6 rules-based scenarios from coach.py (the news one reads cached
+Yahoo Finance headlines; the rest are pure Python).
+Bottom section: optional API key unlocks 7 deeper preset questions + a
 free-form "ask anything" input. Key stored in browser localStorage only.
 
 This module owns the largest concentrated UI surface in the dashboard
@@ -22,6 +23,7 @@ import requests
 from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 import ai_provider
+import news_feed
 from coach import SCENARIOS, render_scenario
 from styles import (
     CARD,
@@ -39,6 +41,19 @@ from styles import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _news_for(port):
+    """Cached headlines for the current holdings, or None if they can't be loaded."""
+    tickers = [p['ticker'] for p in (port or {}).get('positions', []) if p.get('ticker')]
+    if not tickers:
+        return None
+    try:
+        news = news_feed.get_news(tickers)
+    except Exception:
+        log.exception("coach: headline fetch failed")
+        return None
+    return None if all(v is None for v in news.values()) else news
 
 
 def register(app):
@@ -456,8 +471,9 @@ def register(app):
                 log.info("coach: calling provider=%s", provider)
                 context_json = ai_provider.build_portfolio_context(port, intel, val, trades)
                 t0 = time.time()
+                news_ctx = ai_provider.build_news_context(_news_for(port), port)
                 answer, followups = ai_provider.ask(key, context_json, question,
-                                                    history=history)
+                                                    history=history, news_context=news_ctx)
                 log.info("coach: provider reply in %.1fs, %d chars",
                          time.time() - t0, len(answer or ''))
                 if not (answer or '').strip():
@@ -1000,8 +1016,10 @@ def register(app):
                       'gap': '8px'}))
 
             if active_id:
+                scenario_intel = ({**(intel or {}), 'news': _news_for(port)}
+                                  if active_id == 'news' else intel)
                 children.append(html.Div(
-                    render_scenario(active_id, port, intel, val),
+                    render_scenario(active_id, port, scenario_intel, val),
                     style={'marginTop': '14px'},
                 ))
             # Hidden AI-only ids (keep registered for callbacks)

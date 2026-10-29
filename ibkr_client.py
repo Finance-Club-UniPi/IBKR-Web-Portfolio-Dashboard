@@ -311,6 +311,7 @@ class _IBKRConnection:
                 'price_unit_verified': False,
             })
             contracts.append(item.contract)
+        pnl_accounts = {item.contract.conId: item.account for item in items}
 
         # ── Account values (synchronous TWS cache — fast) ─────────────────────
         av = ib.accountValues()
@@ -522,14 +523,49 @@ class _IBKRConnection:
                 log.warning("Daily P&L fetch failed: %s", e)
                 return 0.0
 
-        raw_tickers, (div_data, range_data), fx_rate, daily_fx_rates, daily_pnl, trades = await asyncio.gather(
+        # Chain F: per-position P&L. Unlike PortfolioItem, reqPnLSingle reports
+        # value and unrealized P&L in the account base currency, which embeds
+        # the FX rate at purchase — the input for the since-purchase FX impact.
+        async def _fetch_base_pnl():
+            subs = {}
+            try:
+                for p in positions:
+                    account = pnl_accounts.get(p['conId'])
+                    if account and p['conId']:
+                        subs[p['conId']] = (account, ib.reqPnLSingle(account, '', p['conId']))
+                for _ in range(20):
+                    await asyncio.sleep(0.1)
+                    if all(s.unrealizedPnL == s.unrealizedPnL and s.value == s.value
+                           for _, s in subs.values()):
+                        break
+                result = {}
+                for conid, (_, s) in subs.items():
+                    if s.unrealizedPnL == s.unrealizedPnL and s.value == s.value:
+                        result[conid] = {'base_market_value': round(float(s.value), 2),
+                                         'base_unrealized_pnl': round(float(s.unrealizedPnL), 2)}
+                return result
+            except Exception as e:
+                log.warning("Per-position base P&L fetch failed: %s", e)
+                return {}
+            finally:
+                for conid, (account, _) in subs.items():
+                    try:
+                        ib.cancelPnLSingle(account, '', conid)
+                    except Exception:
+                        pass
+
+        (raw_tickers, (div_data, range_data), fx_rate, daily_fx_rates, daily_pnl, trades,
+         base_pnl) = await asyncio.gather(
             _fetch_tickers(),
             _fetch_dividends(),
             _fetch_fx(),
             _fetch_daily_fx(),
             _fetch_pnl(),
             _fetch_trades(),
+            _fetch_base_pnl(),
         )
+        for p in positions:
+            p.update((base_pnl or {}).get(p['conId'], {}))
 
         # ── Assemble market_data from tickers ─────────────────────────────────
         market_data: dict = {}
@@ -557,7 +593,11 @@ class _IBKRConnection:
             quote_valid = (
                 t is not None and t.contract.secType == 'STK'
                 and (t.contract.currency or '').upper() == p['currency']
-                and t.marketDataType == 1 and fresh_quote_time(t.time)
+                # 1 = live, 3 = delayed (~15 min). Accounts without live US
+                # equity subscriptions only ever get 3; a 15-minute-old stock
+                # price is immaterial for a currency-translation estimate.
+                # Frozen types (2, 4) are last-close data and stay rejected.
+                and t.marketDataType in (1, 3) and fresh_quote_time(t.time)
                 and valid_positive(t.marketPrice())
             )
             p['price_unit_verified'] = bool(quote_valid)

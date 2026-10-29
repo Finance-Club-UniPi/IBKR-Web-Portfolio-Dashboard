@@ -8,7 +8,7 @@ from coach import SCENARIOS, render_scenario
 
 def test_all_scenarios_registered():
     ids = {s['id'] for s in SCENARIOS}
-    assert ids == {'perf', 'biggest_risk', 'what_if', 'sector_geo', 'vs_market'}
+    assert ids == {'perf', 'biggest_risk', 'what_if', 'sector_geo', 'vs_market', 'news'}
 
 
 def test_all_scenarios_have_label():

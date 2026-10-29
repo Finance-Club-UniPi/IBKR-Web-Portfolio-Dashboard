@@ -16,6 +16,8 @@ shown elsewhere on the dashboard.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from dash import html
 
 # ── Presentation helpers ──────────────────────────────────────────────────────
@@ -293,6 +295,70 @@ def scenario_vs_market(port, _intel, val):
     )
 
 
+def _ago(iso: str, now: datetime | None = None) -> str:
+    """'15m ago', '3h ago', '2d ago' for an ISO timestamp ('' if unparseable)."""
+    try:
+        then = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return ''
+    seconds = ((now or datetime.now(timezone.utc)) - then).total_seconds()
+    if seconds < 3600:
+        return f"{max(int(seconds // 60), 1)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def scenario_news(port, intel, _val):
+    """Latest headlines per holding. `intel['news']` is {ticker: [items] | None}."""
+    if not port or not port.get('positions'):
+        return _not_ready("Positions haven't loaded yet.")
+    news = (intel or {}).get('news')
+    if news is None:
+        return _not_ready("Headlines haven't loaded yet (Yahoo Finance may be unreachable).")
+
+    ranked = sorted(port['positions'], key=lambda p: p.get('allocation_pct') or 0, reverse=True)
+    sections, empty = [], []
+    for p in ranked:
+        items = news.get(p['ticker']) or []
+        if not items:
+            empty.append(p['ticker'])
+            continue
+        sections.append(html.Div([
+            html.P([html.Span(p['ticker'], style={'fontWeight': '700'}),
+                    html.Span(f"  {p.get('allocation_pct') or 0:.1f}% of portfolio",
+                              style={'color': '#6b7280', 'fontWeight': '400', 'fontSize': '13px'})],
+                   style={'margin': '0 0 6px', 'fontSize': '15px', 'color': '#111827'}),
+            *[html.Div([
+                html.A(i['title'], href=i['link'], target='_blank', rel='noopener noreferrer',
+                       style={'color': '#1d4ed8', 'textDecoration': 'none', 'fontSize': '14px',
+                              'lineHeight': '1.4'}),
+                html.Div(f"{i['source']} · {_ago(i['published'])}",
+                         style={'fontSize': '12px', 'color': '#6b7280', 'marginTop': '1px'}),
+            ], style={'marginBottom': '8px'}) for i in items[:3]],
+        ], style={'marginBottom': '10px'}))
+
+    if not sections:
+        return _answer("No recent headlines found",
+                       ["Yahoo Finance has nothing from the last two weeks for your holdings. "
+                        "Broad ETFs in particular often have no stories of their own."])
+    fg, bg, bd = _TONE['info']
+    footer = []
+    if empty:
+        footer.append(html.P(f"No recent headlines for: {', '.join(empty)}.",
+                             style={'margin': '4px 0 0', 'fontSize': '13px', 'color': '#6b7280'}))
+    footer.append(html.P("Headlines come from Yahoo Finance and can lag. A story appearing here "
+                         "doesn't mean it moves the price, and none of this is investment advice.",
+                         style={'margin': '8px 0 0', 'fontSize': '12px', 'color': '#6b7280'}))
+    return html.Div([
+        html.P(f"Latest headlines for your {len(sections)} holding"
+               f"{'s' if len(sections) != 1 else ''} with news",
+               style={'margin': '0 0 12px', 'fontWeight': '600', 'fontSize': '16px', 'color': fg}),
+        *sections, *footer,
+    ], style={'background': bg, 'border': f'0.5px solid {bd}', 'borderRadius': '10px',
+              'padding': '16px 18px'})
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 # Order matters: this is the order they appear in the dropdown.
 
@@ -302,6 +368,7 @@ SCENARIOS = [
     {'id': 'what_if',       'label': 'What if my biggest holding drops 20%?', 'fn': scenario_what_if},
     {'id': 'sector_geo',    'label': 'Am I balanced by sector & geography?',  'fn': scenario_sector_geo},
     {'id': 'vs_market',     'label': 'How am I doing vs the market?',    'fn': scenario_vs_market},
+    {'id': 'news',          'label': "What's the latest news on my holdings?", 'fn': scenario_news},
 ]
 
 SCENARIOS_BY_ID = {s['id']: s for s in SCENARIOS}

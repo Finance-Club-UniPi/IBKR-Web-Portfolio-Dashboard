@@ -21,6 +21,7 @@ from config import cfg
 from dashboard_core.helpers import badge, status_banner
 from data_processor import get_summary, process_positions
 from demo_data import DEMO_PORTFOLIOS
+from fx_history import compute_trade_fx
 from ibkr_client import (
     connection_attempt,
     connection_status,
@@ -30,6 +31,8 @@ from ibkr_client import (
     set_demo_mode,
     set_demo_portfolio,
 )
+from market_intel import get_betas
+from trade_history import load_uploaded_trades
 from styles import (
     COLOR_BAD,
     COLOR_BAD_BG,
@@ -133,6 +136,7 @@ def register(app):
         Input('refresh-interval', 'n_intervals'),
         Input('startup-interval', 'n_intervals'),  # fires once at 2 s to catch post-restart timing
         Input('kb-refresh-btn', 'n_clicks'),       # triggered when user presses R
+        Input('uploaded-trades', 'data'),          # new/cleared trade CSV -> recompute FX total
     )
     def fetch_data(*_):
         global _EVER_CONNECTED
@@ -147,29 +151,41 @@ def register(app):
                 return {}, f'connecting:{connection_attempt()}'
             return {}, real
         _EVER_CONNECTED = True
+        # IBKR tick-59 data first; yfinance fills any gaps.  Betas come from
+        # yfinance too.  Both run under one shared 2 s budget so a slow Yahoo
+        # Finance response doesn't block the portfolio-data store.  The
+        # background threads keep running and populate the 4-hour cache, so the
+        # next 60 s tick picks up whatever missed the deadline.
+        div_data = raw.get('div_data', {})
+        tickers  = [p['ticker'] for p in raw['positions']]
+        missing  = [t for t in tickers if t not in div_data]
+        base_ccy = raw.get('account', {}).get('base_currency', 'EUR')
+        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        _div_fut  = _ex.submit(get_dividend_data_yf, missing) if missing else None
+        _beta_fut = _ex.submit(get_betas, tickers)
+        # Since-purchase FX fallback: trade history + Yahoo FX closes (cached).
+        _fx_fut   = None if is_demo_mode() else _ex.submit(
+            compute_trade_fx, raw['positions'], base_ccy,
+            raw.get('trades') or [], load_uploaded_trades(),
+            daily_fx_rates=raw.get('daily_fx_rates', {}))
+        _ex.shutdown(wait=False)
+        concurrent.futures.wait([f for f in (_div_fut, _beta_fut, _fx_fut) if f], timeout=2.0)
+        if _div_fut is not None and _div_fut.done() and not _div_fut.exception():
+            div_data.update(_div_fut.result())
+        betas = _beta_fut.result() if _beta_fut.done() and not _beta_fut.exception() else {}
+        trade_fx = (_fx_fut.result() if _fx_fut is not None and _fx_fut.done()
+                    and not _fx_fut.exception() else {})
+
         df = process_positions(
             raw['positions'], raw.get('market_data', {}),
-            base_currency=raw.get('account', {}).get('base_currency', 'EUR'),
+            base_currency=base_ccy,
             daily_fx_rates=raw.get('daily_fx_rates', {}),
+            betas=betas,
+            trade_fx=trade_fx,
         )
         if df.empty:
             return {}, 'no_positions'
         summary = get_summary(df)
-        # IBKR tick-59 data first; yfinance fills any gaps.
-        # Run with a 2 s timeout so a slow Yahoo Finance response doesn't block
-        # the portfolio-data store.  The background thread keeps running and
-        # populates the 4-hour cache, so the next 60 s tick picks it up.
-        div_data = raw.get('div_data', {})
-        tickers  = [p['ticker'] for p in raw['positions']]
-        missing  = [t for t in tickers if t not in div_data]
-        if missing:
-            _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            _fut = _ex.submit(get_dividend_data_yf, missing)
-            _ex.shutdown(wait=False)
-            try:
-                div_data.update(_fut.result(timeout=2.0))
-            except Exception:
-                pass
         return {
             'positions': df.to_dict('records'),
             'summary':   summary,

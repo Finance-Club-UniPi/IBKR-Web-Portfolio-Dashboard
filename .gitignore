@@ -6,3 +6,12 @@ portfolio.db
 .claude/
 .env
 data/
+
+# Local Python/uv environment; pyproject.toml is already tracked.
+/.venv/
+/venv/
+/uv.lock
+/uv.toml
+/.python-version
+/pyproject.toml
+/pyproject.toml.bak

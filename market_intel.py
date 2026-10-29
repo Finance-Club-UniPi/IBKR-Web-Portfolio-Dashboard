@@ -415,6 +415,31 @@ def _safe_f(v) -> float | None:
         return None
 
 
+def get_betas(tickers: list) -> dict:
+    """
+    Beta vs the S&P 500 for each ticker, from Yahoo Finance's `.info`.
+
+    Stocks expose `beta` (5Y monthly); many ETFs only expose `beta3Year`.
+    Reuses the 4h `.info` cache, so this is free once sector/geo or
+    fundamentals have already looked the ticker up.
+
+    Returns
+    -------
+    {ticker: float | None}  — None means "not available".
+    """
+    key = ('betas', tuple(sorted(tickers)))
+
+    def fetch():
+        def one(sym):
+            info = _yf_info(sym)
+            beta = _safe_f(info.get('beta'))
+            return beta if beta is not None else _safe_f(info.get('beta3Year'))
+
+        return fetch_parallel(tickers, one)
+
+    return cached_fetch(key, _TTL, fetch)
+
+
 def _fetch_fundamentals_one(sym: str) -> dict:
     """Raw fetch — called by get_stock_fundamentals, wrapped in cached_fetch."""
     import yfinance as yf
