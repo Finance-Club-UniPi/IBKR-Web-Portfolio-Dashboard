@@ -6,6 +6,7 @@ from dash import dcc, html
 
 from dashboard_core.helpers import section_label
 from dashboard_core.performance import performance_card
+from dashboard_core.risk import risk_page
 from styles import (
     CARD,
     COLOR_BAD,
@@ -57,7 +58,10 @@ def build_layout(refresh_ms: int) -> html.Div:
                     html.Div([
                         html.Div([
                             html.H1(id='portfolio-title', style={'margin': '0', 'fontSize': '22px', 'fontWeight': '600', 'color': COLOR_TEXT_STRONG}),
-                            html.Div(id='demo-portfolio-switcher', style={'display': 'none'}),
+                            html.Div([
+                                html.Button('Portfolio', id='nav-portfolio', n_clicks=0),
+                                html.Button('Risk metrics', id='nav-risk', n_clicks=0),
+                            ], id='page-nav-pills', style={'display': 'inline-flex', 'gap': '6px', 'alignItems': 'center'}),
                         ], style={'display': 'flex', 'alignItems': 'center', 'gap': '12px', 'flexWrap': 'wrap'}),
                         html.P(id='last-updated', style={'margin': '4px 0 0', 'color': COLOR_TEXT_MUTED, 'fontSize': '14px'}),
                     ], className='header-title-area'),
@@ -194,6 +198,8 @@ def build_layout(refresh_ms: int) -> html.Div:
 
         ], id='main-content-area'),
 
+        risk_page(),
+
         # Toast
         html.Div(id='toast', style={
             'position': 'fixed', 'bottom': '28px', 'right': '28px',
@@ -233,7 +239,7 @@ def build_layout(refresh_ms: int) -> html.Div:
         dcc.Store(id='fund-view-mode', data='grid'),
         dcc.Store(id='coach-panel-scroll-signal', data=0),
         dcc.Store(id='theme-mode', storage_type='local', data='light'),
-        dcc.Store(id='demo-portfolio-id', data='balanced'),
+        dcc.Store(id='page-nav', data='portfolio'),
 
     ], id='app-root', style={
         'fontFamily': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',

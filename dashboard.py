@@ -13,6 +13,7 @@ from dashboard_core import export as _export_mod
 from dashboard_core import intel as _intel_mod
 from dashboard_core import layout as _layout_mod
 from dashboard_core import performance as _performance_mod
+from dashboard_core import risk as _risk_mod
 from dashboard_core import summary as _summary_mod
 from dashboard_core import valuation as _valuation_mod
 from styles import LINK_PILL
@@ -28,6 +29,7 @@ app.layout = _layout_mod.build_layout(_REFRESH_MS)
 _data_callbacks_mod.register(app)
 _summary_mod.register(app)
 _performance_mod.register(app)
+_risk_mod.register(app)
 _export_mod.register(app)
 _detail_mod.register(app)
 _intel_mod.register(app)

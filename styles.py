@@ -38,6 +38,7 @@ COLOR_WARN_BG        = '#fffbeb'               # pale amber — also used by exp
 COLOR_WARN_BORDER    = '#fde68a'               # amber border — also used by export.py (keep as hex)
 COLOR_WARN_DEEP      = '#92400e'               # deep amber — also used by export.py (keep as hex)
 COLOR_BAD            = 'var(--clr-bad)'        # red — negative P&L, overvalued
+COLOR_BAD_PLOT       = '#dc2626'               # red for plotly traces (plotly cannot resolve CSS vars)
 COLOR_BAD_DEEP       = '#991b1b'               # deep red — used by export.py (keep as hex)
 COLOR_BAD_BG         = 'var(--clr-bad-bg)'    # pale red panel background
 COLOR_GOOD_DEEP      = '#166534'               # deep green — used by export.py (keep as hex)
