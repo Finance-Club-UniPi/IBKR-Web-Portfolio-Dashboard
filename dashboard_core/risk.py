@@ -30,6 +30,8 @@ from styles import (
 RISK_PERIODS = ['1Y', '3Y', '5Y']
 _GRID = 'rgba(128,128,128,0.18)'
 _TICK = dict(size=12, color='#888')
+# Zoom stays on; the hover toolbar only offers "reset axes" so a zoom can be undone.
+_GRAPH_CONFIG = {'displaylogo': False, 'modeBarButtons': [['resetScale2d']]}
 _NOTE_STYLE = {'fontSize': '13px', 'color': COLOR_TEXT_MUTED, 'margin': '8px 0 0', 'lineHeight': '1.5'}
 
 
@@ -49,11 +51,11 @@ def risk_page():
         html.Div([
             html.Div([section_label("Value at Risk"),
                       dcc.Graph(id='risk-var-graph', figure=go.Figure(),
-                                config={'displayModeBar': False}, style={'height': '340px'})],
+                                config=_GRAPH_CONFIG, style={'height': '340px'})],
                      style={**CARD, 'flex': '1 1 420px', 'minWidth': '0'}),
             html.Div([section_label("Maximum drawdown"),
                       dcc.Graph(id='risk-dd-graph', figure=go.Figure(),
-                                config={'displayModeBar': False}, style={'height': '340px'})],
+                                config=_GRAPH_CONFIG, style={'height': '340px'})],
                      style={**CARD, 'flex': '1 1 420px', 'minWidth': '0'}),
         ], style={'display': 'flex', 'gap': '14px', 'flexWrap': 'wrap'}),
         html.P(id='risk-note', style=_NOTE_STYLE),

@@ -108,6 +108,8 @@ All four are single-word assignments (bool / float / tuple / None), safe under t
 | `dashboard_core/detail.py` | Position detail slide-out: stats, 52w range bar, price sparkline, trade CSV upload |
 | `dashboard_core/intel.py` | Toast, `populate_market_intel` store, sector/geo charts, earnings calendar |
 | `dashboard_core/valuation.py` | `populate_valuation_data` store, Buffett/CAPE/P-E/Treasury render |
+| `dashboard_core/risk.py` | Risk metrics page (shown via the `page-nav` store): cards, VaR histogram, drawdown chart. Renders only while the page is open; history comes from the same backcast as the performance chart |
+| `risk_metrics.py` | Pure pandas/numpy risk maths: `compute_risk_metrics` (VaR, CVaR, Sharpe, Sortino, drawdown, beta/alpha). No I/O; tested in `tests/test_risk_metrics.py` |
 | `dashboard_core/coach_ui.py` | AI Coach panel: thread list, chat history, preset scenarios, LLM integration |
 | `dashboard_core/export.py` | PDF export callback (lazy reportlab import) |
 | `dashboard_core/helpers.py` | Shared helpers: `section_label`, `make_table`, `badge`, `status_banner`, `to_eur`, `EURUSD_FALLBACK` |
