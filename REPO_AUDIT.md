@@ -19,40 +19,42 @@ Line references below describe the working tree at the time of the audit and can
 
 ## Must fix
 
-~~1. **Local — Since-purchase FX gives inconsistent results for multiple purchases** — [fx_impact.py:74](fx_impact.py#L74)~~
+1. **Local — Since-purchase FX gives inconsistent results for multiple purchases** — [fx_impact.py:74](fx_impact.py#L74)
 
-   ~~- **What this is:** Estimates the currency effect since purchase.~~
-   ~~- **Problem:** Buying one share at $100 with FX 0.8 and another at $200 with FX 0.9 produces **€80** through the aggregate formula, versus **€90** under the documented lot-based convention. This happens even with perfectly known base-currency cost.~~
-   ~~- **Fix:** Use the existing trade-lot calculation when history is complete; otherwise show unavailable. Average cost and aggregate base cost cannot recover the required purchase rates.~~
-   ~~- **If we skip it:** Two calculation paths disagree, and the incorrect aggregate result takes priority.~~
+   - **Status:** Partially fixed: trade-history results now take priority, but the aggregate formula remains reachable when no trade-history result is supplied, including after the background task misses its deadline.
+   - **What this is:** Estimates the currency effect since purchase.
+   - **Problem:** Buying one share at $100 with FX 0.8 and another at $200 with FX 0.9 produces **€80** through the aggregate formula, versus **€90** under the documented lot-based convention. This happens even with perfectly known base-currency cost.
+   - **Fix:** Use the existing trade-lot calculation when history is complete; otherwise show unavailable. Average cost and aggregate base cost cannot recover the required purchase rates.
+   - **If we skip it:** Two calculation paths disagree, and the incorrect aggregate result can still be displayed through the fallback.
 
-~~2. **Remote; extended locally — Portfolio weights can add different currencies together** — [data_processor.py:34](data_processor.py#L34)~~
+2. **Remote; extended locally — Portfolio weights can add different currencies together** — [data_processor.py:34](data_processor.py#L34)
 
-   ~~- **What this is:** Calculates holding weights used by allocation, concentration, and the new portfolio beta.~~
-   ~~- **Problem:** A €100 holding and a $100 holding receive equal weights. At €0.50 per dollar, their actual weights are **66.67% and 33.33%**.~~
-   ~~- **Fix:** Calculate weights only from verified values in one currency. Until that is available, suppress affected weights and aggregate beta for unverified live values.~~
-   ~~- **If we skip it:** The dashboard can report incorrect diversification and risk despite displaying the warning “TWS units.”~~
+   - **Status:** Partially fixed: allocation weights and portfolio beta now require finite base-currency values, but downstream missing-data handling is incomplete. Missing values reproduce a Coach risk-answer exception, `nan%` holding weights, and a `€nan` what-if loss estimate. The allocation donut still uses raw `market_value`.
+   - **What this is:** Calculates holding weights used by allocation, concentration, and the new portfolio beta.
+   - **Problem:** A €100 holding and a $100 holding receive equal weights. At €0.50 per dollar, their actual weights are **66.67% and 33.33%**.
+   - **Fix:** Calculate weights only from verified values in one currency. Until that is available, suppress affected weights and aggregate beta for unverified live values. Update dependent displays and Coach calculations to handle unavailable weights safely, and use the same verified basis for allocation charts.
+   - **If we skip it:** The dashboard can report incorrect diversification and risk despite displaying the warning “TWS units,” or fail when weights are unavailable.
 
-~~3. **Remote — Sorting holdings can open the wrong stock** — [detail.py:843](dashboard_core/detail.py#L843)~~
+3. **Remote — Sorting holdings can open the wrong stock** — [detail.py:843](dashboard_core/detail.py#L843)
 
-   ~~- **What this is:** Opens a position when a table row is clicked.~~
-   ~~- **Problem:** The callback indexes the original table data using the displayed row number. After sorting, those orders differ.~~
-   ~~- **Fix:** Read the table's sorted, paginated viewport data, or use stable row IDs.~~
-   ~~- **If we skip it:** Clicking one ticker can display another ticker's details.~~
+   - **What this is:** Opens a position when a table row is clicked.
+   - **Problem:** The callback indexes the original table data using the displayed row number. After sorting, those orders differ.
+   - **Fix:** Read the table's sorted, paginated viewport data, or use stable row IDs.
+   - **If we skip it:** Clicking one ticker can display another ticker's details.
 
-~~4. **Remote — Coach understates ETF sector exposure by 100 times** — [coach.py:117](coach.py#L117)~~
+4. **Remote — Coach understates ETF sector exposure by 100 times** — [coach.py:117](coach.py#L117)
 
-   ~~- **What this is:** Distributes an ETF's portfolio weight across its sectors.~~
-   ~~- **Problem:** Sector weights are already fractions, but both coach calculations divide them by 100 again. A portfolio entirely invested in a 50%-technology ETF reports **0% technology** after rounding.~~
-   ~~- **Fix:** Remove the extra `/ 100.0` in both calculations and add one numerical regression test.~~
-   ~~- **If we skip it:** The coach can miss substantial sector concentration.~~
+   - **What this is:** Distributes an ETF's portfolio weight across its sectors.
+   - **Problem:** Sector weights are already fractions, but both coach calculations divide them by 100 again. A portfolio entirely invested in a 50%-technology ETF reports **0% technology** after rounding.
+   - **Fix:** Remove the extra `/ 100.0` in both calculations and add one numerical regression test.
+   - **If we skip it:** The coach can miss substantial sector concentration.
 
-~~5. **Remote — A genuine zero daily P&L gets replaced** — [summary.py:75](dashboard_core/summary.py#L75), [export.py:138](dashboard_core/export.py#L138)~~
+5. **Remote — A genuine zero daily P&L gets replaced** — [summary.py:75](dashboard_core/summary.py#L75), [export.py:138](dashboard_core/export.py#L138)
 
-   ~~- **What this is:** Selects broker P&L or a calculated fallback.~~
-   ~~- **Problem:** Python's `or` treats zero as missing. The audit reproduced broker P&L of **0** displaying **€+50.00** instead.~~
-   ~~- **Fix:** Fall back only when the broker value is `None`. Preserve the distinction between unavailable and zero in the producer too.~~
-   ~~- **If we skip it:** The page and PDF can contradict the broker's actual result.~~
+   - **What this is:** Selects broker P&L or a calculated fallback.
+   - **Problem:** Python's `or` treats zero as missing. The audit reproduced broker P&L of **0** displaying **€+50.00** instead.
+   - **Fix:** Fall back only when the broker value is `None`. Preserve the distinction between unavailable and zero in the producer too.
+   - **If we skip it:** The page and PDF can contradict the broker's actual result.
 
 6. **Remote — Market intelligence can remain blank or stale indefinitely** — [intel.py:99](dashboard_core/intel.py#L99)
 
