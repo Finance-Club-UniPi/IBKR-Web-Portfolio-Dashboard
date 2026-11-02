@@ -11,6 +11,8 @@ these functions are safe to call from any thread or from tests.
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from fx_impact import daily_fx_impact, total_fx_impact
@@ -31,8 +33,13 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
     df['pnl_pct'] = ((df['current_price'] - df['avg_cost']) / df['avg_cost'] * 100).round(2)
     df['total_cost'] = (df['avg_cost'] * df['quantity']).round(2)
 
-    total_value = df['market_value'].sum()
-    df['allocation_pct'] = ((df['market_value'] / total_value) * 100).round(2)
+    base_values = _verified_base_values(df)
+    total_base_value = base_values.sum() if base_values is not None else None
+    if (total_base_value is not None and total_base_value > 0
+            and math.isfinite(float(total_base_value))):
+        df['allocation_pct'] = ((base_values / total_base_value) * 100).round(2)
+    else:
+        df['allocation_pct'] = float('nan')
 
     # Market data enrichment
     daily_changes = []
@@ -127,13 +134,30 @@ def portfolio_beta(df):
     """
     if df.empty or 'beta' not in df.columns:
         return None, 0.0, 0
-    total = df['market_value'].sum()
-    known = df[df['beta'].notna() & (df['market_value'] > 0)]
-    covered = known['market_value'].sum()
+    base_values = _verified_base_values(df)
+    if base_values is None:
+        return None, 0.0, 0
+    total = base_values.sum()
+    if not math.isfinite(float(total)) or total <= 0:
+        return None, 0.0, 0
+    known_mask = df['beta'].notna() & (base_values > 0)
+    known = df.loc[known_mask]
+    covered_values = base_values[known_mask]
+    covered = covered_values.sum()
     if not total or not covered:
         return None, 0.0, 0
-    beta = (known['beta'] * known['market_value']).sum() / covered
+    beta = (known['beta'] * covered_values).sum() / covered
     return round(float(beta), 2), round(float(covered / total * 100), 1), len(known)
+
+
+def _verified_base_values(df):
+    """Return finite per-position base-currency values only when all are known."""
+    if 'base_market_value' not in df.columns:
+        return None
+    values = pd.to_numeric(df['base_market_value'], errors='coerce')
+    if values.isna().any() or not all(math.isfinite(float(value)) for value in values):
+        return None
+    return values
 
 
 def get_summary(df):
@@ -151,6 +175,13 @@ def get_summary(df):
     fx = df['fx_today'].dropna() if 'fx_today' in df.columns else df['market_value'].iloc[0:0]
     fx_all = df['fx_total'].dropna() if 'fx_total' in df.columns else fx.iloc[0:0]
     beta, beta_coverage_pct, beta_count = portfolio_beta(df)
+    if df['allocation_pct'].notna().all():
+        largest_idx = df['allocation_pct'].idxmax()
+        largest_position = df.loc[largest_idx, 'ticker']
+        largest_position_pct = df.loc[largest_idx, 'allocation_pct']
+    else:
+        largest_position = None
+        largest_position_pct = None
 
     summary = {
         'total_value':         round(total_value, 2),
@@ -168,8 +199,8 @@ def get_summary(df):
         'best_performer':      df.loc[df['pnl_pct'].idxmax(), 'ticker'],
         'worst_performer':     df.loc[df['pnl_pct'].idxmin(), 'ticker'],
         'total_daily_pnl':     total_daily_pnl,
-        'largest_position':    df.iloc[0]['ticker'],
-        'largest_position_pct':df.iloc[0]['allocation_pct'],
+        'largest_position':    largest_position,
+        'largest_position_pct':largest_position_pct,
     }
 
     return summary
