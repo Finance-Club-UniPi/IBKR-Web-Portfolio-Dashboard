@@ -97,15 +97,16 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
     df['fx_today_reason'] = [reason for _, reason in fx]
     fx_total = [total_fx_impact(row.to_dict(), base_currency, daily_fx_rates)
                 for _, row in df.iterrows()]
-    # TWS base-currency P&L is exact when it is in base units; otherwise fall back
-    # to the trade-history reconstruction (and surface its reason when it fails too).
+    # Average cost and aggregate base P&L cannot recover each purchase's FX rate.
+    # Prefer the trade-lot estimate whenever trade history was evaluated.
     sources = []
     for i, ticker in enumerate(df['ticker']):
-        value, reason = fx_total[i]
-        source = 'IBKR base P&L'
-        if value is None and ticker in trade_fx:
+        if ticker in trade_fx:
             value, reason = trade_fx[ticker]
             source = 'trade history'
+        else:
+            value, reason = fx_total[i]
+            source = 'IBKR base P&L'
         fx_total[i] = (value, reason)
         sources.append(source if value is not None else None)
     df['fx_total'] = pd.Series([value for value, _ in fx_total], index=df.index, dtype='float64')
