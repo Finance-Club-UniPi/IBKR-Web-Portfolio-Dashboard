@@ -1,7 +1,7 @@
 # IBKR Portfolio Dashboard — Windows Installer
 # ─────────────────────────────────────────────
 # Run this once in PowerShell (no admin required):
-#   irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 $REPO = "GameMaster301/IBKR-Web-Portfolio-Dashboard"

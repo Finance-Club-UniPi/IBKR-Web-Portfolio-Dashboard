@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Start IBKR Portfolio Dashboard
-cd "$(dirname "$0")"
+# Release ZIPs keep Compose beside the launcher; the source repo keeps it above.
+cd -- "$(dirname -- "$0")" || exit 1
+launcher_dir=$PWD
+if [ ! -f docker-compose.yml ]; then
+    cd .. || exit 1
+fi
 
 echo ""
 echo " Starting IBKR Portfolio Dashboard..."
@@ -25,5 +30,5 @@ else
 fi
 
 echo " Dashboard is running at http://localhost:8050"
-echo " To stop it, run: ./stop.sh"
+echo " To stop it, run: $launcher_dir/stop.sh"
 echo ""

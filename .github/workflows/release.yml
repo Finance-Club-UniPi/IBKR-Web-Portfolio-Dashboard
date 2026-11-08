@@ -61,12 +61,12 @@ jobs:
           mkdir -p pkg/ibkrdash
           cp docker-compose.yml  pkg/ibkrdash/
           cp .env.example        pkg/ibkrdash/.env
-          cp start.bat           pkg/ibkrdash/
-          cp stop.bat            pkg/ibkrdash/
-          cp update.bat          pkg/ibkrdash/
-          cp start.sh            pkg/ibkrdash/
-          cp stop.sh             pkg/ibkrdash/
-          cp update.sh           pkg/ibkrdash/
+          cp scripts/start.bat           pkg/ibkrdash/
+          cp scripts/stop.bat            pkg/ibkrdash/
+          cp scripts/update.bat          pkg/ibkrdash/
+          cp scripts/start.sh            pkg/ibkrdash/
+          cp scripts/stop.sh             pkg/ibkrdash/
+          cp scripts/update.sh           pkg/ibkrdash/
           cp SETUP.txt           pkg/ibkrdash/
           chmod +x pkg/ibkrdash/*.sh
           cd pkg && zip -r ../ibkrdash-setup.zip ibkrdash/
@@ -87,12 +87,12 @@ jobs:
 
             **Windows** — paste into PowerShell:
             ```powershell
-            irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/install.ps1 | iex
+            irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/scripts/install.ps1 | iex
             ```
 
             **Mac / Linux** — paste into Terminal:
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/scripts/install.sh | bash
             ```
 
             ---

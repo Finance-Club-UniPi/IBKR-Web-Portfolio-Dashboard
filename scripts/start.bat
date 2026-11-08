@@ -1,6 +1,7 @@
 @echo off
 title IBKR Portfolio Dashboard
 cd /d "%~dp0"
+if not exist "docker-compose.yml" cd /d "%~dp0.."
 
 echo.
 echo  Starting IBKR Portfolio Dashboard...
@@ -22,6 +23,6 @@ start http://localhost:8050
 echo  Dashboard is running at http://localhost:8050
 echo.
 echo  This window can be closed — the dashboard keeps running in the background.
-echo  To stop it, run stop.bat
+echo  To stop it, run "%~dp0stop.bat"
 echo.
 pause

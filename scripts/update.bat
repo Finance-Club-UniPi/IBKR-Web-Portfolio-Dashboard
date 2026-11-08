@@ -1,6 +1,7 @@
 @echo off
 title IBKR Dashboard — Update
 cd /d "%~dp0"
+if not exist "docker-compose.yml" cd /d "%~dp0.."
 
 echo.
 echo  Updating IBKR Portfolio Dashboard to the latest version...

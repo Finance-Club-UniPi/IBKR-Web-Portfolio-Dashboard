@@ -111,7 +111,7 @@ git push origin v1.2.0
 
 The release workflow (`.github/workflows/release.yml`) will:
 1. Build and push the Docker image tagged `:latest` and `:v1.2.0`
-2. Package `ibkrdash-setup.zip` (contains `docker-compose.yml`, `.env`, start/stop/update scripts, `SETUP.txt`)
+2. Copy launchers from `scripts/` into the root of `ibkrdash-setup.zip` (contains `docker-compose.yml`, `.env`, start/stop/update scripts, `SETUP.txt`)
 3. Create a GitHub Release with the zip and install instructions
 
 ### Required GitHub repository secrets

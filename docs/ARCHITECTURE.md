@@ -34,6 +34,7 @@ live brokerage account. CI runs all three checks on Python 3.12.
 ```text
 main.py                     Start logging, broker connection, and web server
 config.py / config.yaml     Configuration and shared runtime-data location
+scripts/                    Optional Docker installers and launchers
 backend/
   portfolio_service.py      Fetch → enrich → calculate → return snapshot
   portfolio/
@@ -145,6 +146,19 @@ answer; in particular, missing trade-lot FX never enables an aggregate fallback.
   [listed domestic market capitalization in current USD](https://data.worldbank.org/indicator/CM.MKT.LCAP.CD)
   and [GDP in current USD](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD).
   The UI states the observation year. This is not a live market estimate.
+
+## Optional Docker scripts
+
+These are not needed for `python main.py`. From a source checkout, use
+`bash scripts/start.sh`, `bash scripts/stop.sh`, or `bash scripts/update.sh`.
+Windows users can run the corresponding `scripts\start.bat`, `stop.bat`, and
+`update.bat` files. The launchers locate Compose relative to their own location,
+so the terminal's current folder does not matter.
+
+`install.sh` and `install.ps1` also live in `scripts/`. They create a separate
+Docker installation under the user's home directory, retaining its existing
+flat layout. The release ZIP likewise keeps start/stop/update files beside
+Compose; the release workflow copies them from `scripts/` in the source tree.
 
 ## Persistence and deployment
 

@@ -36,12 +36,12 @@ Dash UI and PDF rendering are in `ui/`. Run locally with `python main.py --demo`
 
 **Windows** — paste into PowerShell:
 ```powershell
-irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/scripts/install.ps1 | iex
 ```
 
 **Mac / Linux** — paste into Terminal:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/main/scripts/install.sh | bash
 ```
 
 **No terminal?** Download the [latest release zip](https://github.com/GameMaster301/IBKR-Web-Portfolio-Dashboard/releases/latest), extract it, and follow `SETUP.txt`.
