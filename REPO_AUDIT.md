@@ -4,6 +4,53 @@ What this repo does: It displays an Interactive Brokers portfolio, adds market i
 
 **Recommendation: make targeted fixes while preserving the existing architecture. No source code was changed during this audit.**
 
+## Implementation status — 8 November 2026
+
+The 19 findings below are the historical audit, not a list of current open bugs.
+Their code fixes are implemented. The application has also been reorganized;
+start with [the developer map](docs/ARCHITECTURE.md). Local verification passes
+**116 tests**, smoke checks, Ruff, app layout/asset requests, PDF regression
+checks, and a demo-entry-point check. External verification limits remain below.
+
+| Finding | Implemented change | Current location |
+|---|---|---|
+| 1 | Deleted aggregate FX estimator; complete lots or unavailable, including a deadline miss | `backend/portfolio/fx.py`, `backend/portfolio_service.py` |
+| 2 | Verified native quote/FX basis for weights; missing weights suppressed in Coach, table, and charts | `backend/portfolio/positions.py`, `exposure.py`, `ui/components/` |
+| 3 | Selection reads sorted/paginated viewport rows | `ui/callbacks/detail.py` |
+| 4 | One sector aggregation; ETF fractions are used once and unknown coverage is retained | `backend/portfolio/exposure.py` |
+| 5 | Shared daily-P&L selection preserves zero; broker producer preserves missing results | `backend/portfolio/positions.py`, `backend/providers/ibkr.py` |
+| 6 | Removed global ticker guard; each tab refreshes through the timed cache; exposure listens to holdings updates | `ui/callbacks/intel.py` |
+| 7 | Sibling temporary file, flush/fsync, atomic replace, and locked merge/delete | `backend/storage/trades.py` |
+| 8 | Restored original Ruff policy and resolved lint errors; runtime/CI target is Python 3.12 | `pyproject.toml`, `main.py`, `.github/workflows/checks.yml` |
+| 9 | Runtime data, environments, generated graphs, and local metadata excluded from Docker context | `.dockerignore` |
+| 10 | Published Compose port binds to 127.0.0.1 | `docker-compose.yml` |
+| 11 | Performance callback also responds to the existing refresh interval | `ui/callbacks/performance.py` |
+| 12 | UI/PDF explicitly describe dividend-adjusted total-return backcasts | `ui/callbacks/performance.py`, `ui/reports/pdf.py` |
+| 13 | Aggregate beta is unavailable for portfolios containing shorts | `backend/portfolio/positions.py` |
+| 14 | AI context carries explicit units/currencies and cash_base; Coach formats account currency and handles unavailable values | `backend/providers/ai.py`, `backend/coaching/scenarios.py` |
+| 15 | Named writable /app/data volume; cache and trades share one configured location | `docker-compose.yml`, `Dockerfile`, `config.py` |
+| 16 | CI runs the pytest suite after smoke checks | `.github/workflows/checks.yml` |
+| 17 | Matched annual USD market capitalization/GDP replaces the unverified index-point conversion | `backend/providers/valuation.py`, `ui/components/valuation.py` |
+| 18 | Broker trades forwarded into the central store; schema includes trades | `backend/portfolio_service.py`, `backend/schemas.py` |
+| 19 | Quantity formatted without integer conversion or a fixed decimal cutoff | `ui/reports/pdf.py` |
+
+The Buffett ratio is now explicitly a **dated annual observation**, not a live
+estimate. Its two World Bank series have explicit USD units and a common year;
+source links and conventions are documented in the developer map. Portfolio
+history remains a backcast of today's holdings rather than an account ledger.
+
+**Not verified live:** TWS/account units, market and AI providers, full browser
+interaction, or a built/running Docker image. Compose is not installed in this
+environment; the deployment changes received static YAML/configuration checks.
+Existing pandas/NumPy and Dash DataTable deprecation warnings remain. The
+single-process storage lock does not provide a multi-worker deployment guarantee.
+See the developer map for the backup procedure before upgrading older containers
+that have no persistent data volume.
+
+---
+
+## Historical audit
+
 ## Baseline and provenance
 
 At the time of the audit, GitHub matched `origin/main` at **`e6ea293`**. The labels below describe where the faulty logic originated, even when its file also contains newer changes:
@@ -19,7 +66,7 @@ Line references below describe the working tree at the time of the audit and can
 
 ## Must fix
 
-1. **Local — Since-purchase FX gives inconsistent results for multiple purchases** — [fx_impact.py:74](fx_impact.py#L74)
+1. **Local — Since-purchase FX gives inconsistent results for multiple purchases** — [fx_impact.py:74](backend/portfolio/fx.py#L74)
 
    - **Status:** Partially fixed: trade-history results now take priority, but the aggregate formula remains reachable when no trade-history result is supplied, including after the background task misses its deadline.
    - **What this is:** Estimates the currency effect since purchase.
@@ -27,7 +74,7 @@ Line references below describe the working tree at the time of the audit and can
    - **Fix:** Use the existing trade-lot calculation when history is complete; otherwise show unavailable. Average cost and aggregate base cost cannot recover the required purchase rates.
    - **If we skip it:** Two calculation paths disagree, and the incorrect aggregate result can still be displayed through the fallback.
 
-2. **Remote; extended locally — Portfolio weights can add different currencies together** — [data_processor.py:34](data_processor.py#L34)
+2. **Remote; extended locally — Portfolio weights can add different currencies together** — [data_processor.py:34](backend/portfolio/positions.py#L34)
 
    - **Status:** Partially fixed: allocation weights and portfolio beta now require finite base-currency values, but downstream missing-data handling is incomplete. Missing values reproduce a Coach risk-answer exception, `nan%` holding weights, and a `€nan` what-if loss estimate. The allocation donut still uses raw `market_value`.
    - **What this is:** Calculates holding weights used by allocation, concentration, and the new portfolio beta.
@@ -35,35 +82,35 @@ Line references below describe the working tree at the time of the audit and can
    - **Fix:** Calculate weights only from verified values in one currency. Until that is available, suppress affected weights and aggregate beta for unverified live values. Update dependent displays and Coach calculations to handle unavailable weights safely, and use the same verified basis for allocation charts.
    - **If we skip it:** The dashboard can report incorrect diversification and risk despite displaying the warning “TWS units,” or fail when weights are unavailable.
 
-3. **Remote — Sorting holdings can open the wrong stock** — [detail.py:843](dashboard_core/detail.py#L843)
+3. **Remote — Sorting holdings can open the wrong stock** — [detail.py:843](ui/callbacks/detail.py#L843)
 
    - **What this is:** Opens a position when a table row is clicked.
    - **Problem:** The callback indexes the original table data using the displayed row number. After sorting, those orders differ.
    - **Fix:** Read the table's sorted, paginated viewport data, or use stable row IDs.
    - **If we skip it:** Clicking one ticker can display another ticker's details.
 
-4. **Remote — Coach understates ETF sector exposure by 100 times** — [coach.py:117](coach.py#L117)
+4. **Remote — Coach understates ETF sector exposure by 100 times** — [coach.py:117](backend/coaching/scenarios.py#L117)
 
    - **What this is:** Distributes an ETF's portfolio weight across its sectors.
    - **Problem:** Sector weights are already fractions, but both coach calculations divide them by 100 again. A portfolio entirely invested in a 50%-technology ETF reports **0% technology** after rounding.
    - **Fix:** Remove the extra `/ 100.0` in both calculations and add one numerical regression test.
    - **If we skip it:** The coach can miss substantial sector concentration.
 
-5. **Remote — A genuine zero daily P&L gets replaced** — [summary.py:75](dashboard_core/summary.py#L75), [export.py:138](dashboard_core/export.py#L138)
+5. **Remote — A genuine zero daily P&L gets replaced** — [summary.py:75](ui/callbacks/summary.py#L75), [export.py:138](ui/callbacks/export.py#L138)
 
    - **What this is:** Selects broker P&L or a calculated fallback.
    - **Problem:** Python's `or` treats zero as missing. The audit reproduced broker P&L of **0** displaying **€+50.00** instead.
    - **Fix:** Fall back only when the broker value is `None`. Preserve the distinction between unavailable and zero in the producer too.
    - **If we skip it:** The page and PDF can contradict the broker's actual result.
 
-6. **Remote — Market intelligence can remain blank or stale indefinitely** — [intel.py:99](dashboard_core/intel.py#L99)
+6. **Remote — Market intelligence can remain blank or stale indefinitely** — [intel.py:99](ui/callbacks/intel.py#L99)
 
    - **What this is:** Avoids fetching information when ticker symbols have not changed.
    - **Problem:** The guard belongs to the server, while the data store belongs to each browser tab. A second tab receives `no_update`; unchanged holdings also prevent expired data from being fetched again.
    - **Fix:** Remove the global ticker guard and use the existing timed cache. Make allocation rendering respond to portfolio updates too.
    - **If we skip it:** Another tab can stay empty, and earnings or exposure information can remain outdated.
 
-7. **Remote — An interrupted trade-history save destroys the previous file** — [trade_history.py:141](trade_history.py#L141)
+7. **Remote — An interrupted trade-history save destroys the previous file** — [trade_history.py:141](backend/storage/trades.py#L141)
 
    - **What this is:** Saves uploaded transactions.
    - **Problem:** Opening the destination with `'w'` truncates it before the replacement is complete. A simulated write failure left invalid JSON, which subsequently loaded as an empty history.
@@ -93,28 +140,28 @@ Line references below describe the working tree at the time of the audit and can
 
 ## Should fix
 
-11. **Local — The performance chart stops refreshing when holdings stay unchanged** — [performance.py:284](dashboard_core/performance.py#L284)
+11. **Local — The performance chart stops refreshing when holdings stay unchanged** — [performance.py:284](ui/callbacks/performance.py#L284)
 
     - **What this is:** Refreshes historical performance through a holdings store.
     - **Problem:** That store excludes prices and dates, and the chart has no interval input. It can remain unchanged across trading days until the user changes a control.
     - **Fix:** Connect chart refresh to the existing interval; retain the shared price cache.
     - **If we skip it:** A refreshed dashboard can display an old performance chart.
 
-12. **Local — “Dividends excluded” conflicts with the downloaded prices** — [portfolio_history.py:176](portfolio_history.py#L176)
+12. **Local — “Dividends excluded” conflicts with the downloaded prices** — [portfolio_history.py:176](backend/portfolio/history.py#L176)
 
     - **What this is:** Builds the historical holdings chart and PDF comparison.
     - **Problem:** The inherited download helper uses dividend-adjusted prices. A stock dropping from $100 to $90 while paying a $10 dividend can therefore appear flat, although the new description says dividends are excluded.
     - **Fix:** Choose one interpretation consistently: use prices without dividend adjustment, or label the adjusted series and its absolute values accurately.
     - **If we skip it:** Users cannot reliably interpret the reported value and return.
 
-13. **Local — Portfolio beta silently drops short positions** — [data_processor.py:120](data_processor.py#L120)
+13. **Local — Portfolio beta silently drops short positions** — [data_processor.py:120](backend/portfolio/positions.py#L120)
 
     - **What this is:** Combines individual holding sensitivities into portfolio beta.
     - **Problem:** Negative positions are excluded from the numerator but remain in the coverage denominator. A €100 long at beta 1 and €50 short at beta 2 returns **beta 1 with 200% coverage**, rather than the signed exposure's beta 0.
     - **Fix:** Either calculate signed exposure consistently or explicitly show aggregate beta as unavailable for short-containing portfolios.
     - **If we skip it:** A hedge can appear to contribute no risk reduction.
 
-14. **Remote — Coach inputs label non-EUR amounts as EUR and omit cash** — [ai_provider.py:314](ai_provider.py#L314)
+14. **Remote — Coach inputs label non-EUR amounts as EUR and omit cash** — [ai_provider.py:314](backend/providers/ai.py#L314)
 
     - **What this is:** Builds the portfolio information sent to the AI.
     - **Problem:** USD-account values become `total_value_eur` and `net_liq_eur`. Cash is read from `cash_eur`, while the producer supplies `cash_base`; the rules-based coach also hardcodes euros.
@@ -135,21 +182,21 @@ Line references below describe the working tree at the time of the audit and can
     - **Fix:** Add `python -m pytest -q` after the smoke test.
     - **If we skip it:** The existing regression tests provide no automatic protection when merging.
 
-17. **Remote — The Buffett estimate assumes index points equal dollar billions** — [market_valuation.py:117](market_valuation.py#L117)
+17. **Remote — The Buffett estimate assumes index points equal dollar billions** — [market_valuation.py:117](backend/providers/valuation.py#L117)
 
     - **What this is:** Estimates total market capitalization divided by GDP.
     - **Problem:** It directly treats the Wilshire index level as capitalization in billions. Wilshire documents that the conversion changes with its divisor; it was already approximately $1.05 billion per point in 2020. [Wilshire methodology, §2.2.1](https://assets-global.website-files.com/60f8038183eb84c40e8c14e9/612f894c20ad970151859d9d_FT%20Wilshire%205000%20Index%20Series.pdf)
     - **Fix:** Use capitalization data with explicit dollar units, or a verified applicable divisor. Do not hardcode the historical 1.05 figure.
     - **If we skip it:** The displayed ratio and valuation classification contain an uncontrolled approximation.
 
-18. **Remote — Fetched live trades never reach their display consumers** — [data_callbacks.py:189](dashboard_core/data_callbacks.py#L189)
+18. **Remote — Fetched live trades never reach their display consumers** — [data_callbacks.py:189](ui/callbacks/portfolio.py#L189)
 
     - **What this is:** Passes fetched broker data into the central portfolio store.
     - **Problem:** The producer fetches live trades, but this callback omits them. Position details subsequently read `data['trades']` and receive nothing.
     - **Fix:** Forward `raw.get('trades', [])` and update the store schema.
     - **If we skip it:** Recent broker trades remain absent from the detail chart.
 
-19. **Remote — PDF export truncates fractional quantities** — [export.py:364](dashboard_core/export.py#L364)
+19. **Remote — PDF export truncates fractional quantities** — [export.py:364](ui/callbacks/export.py#L364)
 
     - **What this is:** Prints each holding's quantity.
     - **Problem:** `int(quantity)` turns 0.75 shares into 0 and 1.75 into 1.
