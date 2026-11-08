@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 from ib_async import IB, ExecutionFilter, Forex
 
 from config import cfg
-from fx_impact import fx_session_open, fresh_quote_time, previous_daily_close, quote_to_base, valid_positive
+from fx_impact import fresh_quote_time, fx_session_open, previous_daily_close, quote_to_base, valid_positive
 
 log = logging.getLogger(__name__)
 

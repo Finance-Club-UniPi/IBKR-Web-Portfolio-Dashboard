@@ -38,3 +38,13 @@ dist/
 
 # Logs
 *.log
+
+# Private runtime data and local tooling
+data/
+.venv/
+venv/
+graphify-out/
+.agents/
+.codex/
+.aws/
+.claude/

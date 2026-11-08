@@ -15,6 +15,8 @@ import csv
 import json
 import logging
 import os
+import tempfile
+import threading
 from datetime import datetime
 from io import StringIO
 
@@ -22,6 +24,7 @@ log = logging.getLogger(__name__)
 
 _DATA_DIR   = os.environ.get('IBKRDASH_DATA_DIR') or os.path.join(os.getcwd(), 'data')
 _STORE_PATH = os.path.join(_DATA_DIR, 'uploaded_trades.json')
+_WRITE_LOCK = threading.RLock()
 
 
 def _parse_dt(raw):
@@ -140,24 +143,34 @@ def load_uploaded_trades() -> list:
 
 def save_uploaded_trades(new_trades: list) -> list:
     """Merge `new_trades` into the persisted list, dedupe, and return the full list."""
-    os.makedirs(_DATA_DIR, exist_ok=True)
-    existing = load_uploaded_trades()
-    seen = {_trade_key(t) for t in existing}
-    for t in new_trades:
-        k = _trade_key(t)
-        if k not in seen:
-            existing.append(t)
-            seen.add(k)
-    existing.sort(key=lambda x: x.get('time') or '')
-    with open(_STORE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(existing, f, indent=2, default=str)
-    return existing
+    with _WRITE_LOCK:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        existing = load_uploaded_trades()
+        seen = {_trade_key(t) for t in existing}
+        for trade in new_trades:
+            key = _trade_key(trade)
+            if key not in seen:
+                existing.append(trade)
+                seen.add(key)
+        existing.sort(key=lambda x: x.get('time') or '')
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=_DATA_DIR,
+                                             delete=False) as output:
+                temporary = output.name
+                json.dump(existing, output, indent=2, default=str)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, _STORE_PATH)
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+        return existing
+
 
 
 def clear_uploaded_trades() -> list:
-    try:
+    with _WRITE_LOCK:
         if os.path.exists(_STORE_PATH):
             os.remove(_STORE_PATH)
-    except Exception as e:
-        log.warning('Failed to clear uploaded trades: %s', e)
     return []

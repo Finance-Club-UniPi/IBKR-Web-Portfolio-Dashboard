@@ -32,7 +32,6 @@ from ibkr_client import (
     set_demo_portfolio,
 )
 from market_intel import get_betas
-from trade_history import load_uploaded_trades
 from styles import (
     COLOR_BAD,
     COLOR_BAD_BG,
@@ -49,6 +48,7 @@ from styles import (
     COLOR_WARN_BORDER,
     COLOR_WARN_DEEP,
 )
+from trade_history import load_uploaded_trades
 
 # Startup grace period: during the first ~25 s after launch we show a
 # "Connecting …" spinner instead of "Disconnected" — the IB thread needs a

@@ -14,7 +14,7 @@ A real-time, private portfolio dashboard for Interactive Brokers — built with 
 ## Try it instantly — no IBKR account needed
 
 ```bash
-docker run --rm -e DEMO_MODE=1 -p 8050:8050 gmarinos/ibkrdash:latest
+docker run --rm -e DEMO_MODE=1 -p 127.0.0.1:8050:8050 gmarinos/ibkrdash:latest
 ```
 
 Open **http://localhost:8050**. Loads a realistic sample portfolio with live yfinance prices — every feature works, no brokerage connection required.

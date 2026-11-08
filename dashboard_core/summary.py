@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.express as px
 from dash import Input, Output, State, dash_table, dcc, html
 
-from dashboard_core.helpers import EURUSD_FALLBACK, ccy_symbol, make_table, section_label, to_base
+from dashboard_core.helpers import EURUSD_FALLBACK, ccy_symbol, make_table, section_label
 from decorators import NotReadyError, safe_render
 from schemas import PortfolioData
 from styles import (

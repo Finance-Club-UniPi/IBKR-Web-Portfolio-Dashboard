@@ -21,7 +21,7 @@ docker compose up -d
 Or one-shot:
 
 ```bash
-docker run --rm -e DEMO_MODE=1 -p 8050:8050 gmarinos/ibkrdash:latest
+docker run --rm -e DEMO_MODE=1 -p 127.0.0.1:8050:8050 gmarinos/ibkrdash:latest
 ```
 
 **Option 3 — CLI flag (running from source)**

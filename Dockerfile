@@ -26,10 +26,13 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY --chown=appuser:appuser . .
 
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+
 USER appuser
 
 # ── Environment defaults (all overridable at runtime) ─────────────────────────
-ENV PYTHONUNBUFFERED=1 \
+ENV IBKRDASH_DATA_DIR=/app/data \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     # Dashboard listens on all interfaces so Docker port mapping works
     DASH_HOST=0.0.0.0 \
