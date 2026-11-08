@@ -2,7 +2,7 @@
 
 import pytest
 
-from ai_provider import _strip_followups, detect_provider, provider_label
+from backend.providers.ai import _strip_followups, detect_provider, provider_label
 
 # ── detect_provider ──────────────────────────────────────────────────────────
 

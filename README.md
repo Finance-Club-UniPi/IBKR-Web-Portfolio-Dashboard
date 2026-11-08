@@ -19,6 +19,12 @@ docker run --rm -e DEMO_MODE=1 -p 127.0.0.1:8050:8050 gmarinos/ibkrdash:latest
 
 Open **http://localhost:8050**. Loads a realistic sample portfolio with live yfinance prices — every feature works, no brokerage connection required.
 
+## Working on the code
+
+Start with the [developer map](docs/ARCHITECTURE.md): it lists where each
+calculation, screen, provider, and test lives. Backend logic is in `backend/`;
+Dash UI and PDF rendering are in `ui/`. Run locally with `python main.py --demo`.
+
 ## Screenshot
 
 <img width="1880" height="913" alt="screenshot" src="https://github.com/user-attachments/assets/e841e5af-2c26-452b-8d65-df03160206b3" />
@@ -51,7 +57,7 @@ Each installer creates a desktop shortcut so double-clicking starts the dashboar
 - **Market Intelligence** — sector & geography exposure, earnings calendar with post-earnings moves
 - **Dividends** — yield per position, projected 12-month income, payment schedule
 - **Historical trades** — upload IBKR Transaction History CSV per position; BUY/SELL markers overlaid on price chart
-- **Portfolio Coach** — chat panel with 5 rules-based scenarios out of the box; optionally paste an Anthropic / xAI / OpenAI key for free-form chat
+- **Portfolio Coach** — chat panel with 6 rules-based scenarios out of the box; optionally paste an Anthropic / xAI / OpenAI key for free-form chat
 - **PDF export**, **auto-reconnect**, **demo mode** — see [docs/DEMO.md](docs/DEMO.md)
 
 ## Daily FX impact in Holdings
@@ -60,8 +66,9 @@ effect on each current position: `quantity × contract multiplier × current
 native price × (FX now − previous FX daily close)`. Both FX rates are expressed
 as account-base units per unit of the instrument currency. The current price
 allocates the price/FX cross-term to FX. This is a daily estimate, not IBKR's
-P&L reset or a since-purchase attribution; the latter would need acquisition
-FX rates and lot history.
+P&L reset or a since-purchase attribution. The separate **FX total** column
+uses open FIFO trade lots and purchase-date FX closes; it stays unavailable
+when the required history, quote, or rates are missing.
 
 The live path uses the TWS/`ib_async` portfolio contract currency and supports
 stock/ETF (`STK`) price units. It uses a fresh native-currency quote for the

@@ -6,11 +6,12 @@ from types import SimpleNamespace
 import pandas as pd
 from dash.development.base_component import Component
 
-import ai_provider
-import coach
-import market_valuation
-from data_processor import portfolio_beta
-from exposure import sector_geo_breakdown
+import backend.coaching.scenarios as coach
+import backend.providers.ai as ai_provider
+import backend.providers.valuation as market_valuation
+from backend.portfolio.exposure import sector_geo_breakdown
+from backend.portfolio.positions import portfolio_beta
+from ui.components.scenarios import render_scenario
 
 
 class App:
@@ -46,12 +47,12 @@ def test_etf_sector_weights_are_fractions_in_both_coach_answers():
 
 
 def test_missing_weights_are_unavailable_in_coach_and_chart():
-    from dashboard_core.summary import register
+    from ui.callbacks.summary import register
 
     port = {'positions': [{'ticker': 'X', 'allocation_pct': float('nan'), 'market_value': 100}],
             'summary': {'largest_position_pct': None}}
     for scenario in ('biggest_risk', 'sector_geo', 'what_if'):
-        answer = text(coach.render_scenario(scenario, port, {'sector_geo': {'X': {}}}, None))
+        answer = text(render_scenario(scenario, port, {'sector_geo': {'X': {}}}, None))
         assert 'unavailable' in answer
         assert 'nan' not in answer and 'TypeError' not in answer
     app = App()
@@ -66,7 +67,7 @@ def test_short_portfolio_beta_is_explicitly_unavailable():
 
 
 def test_broker_zero_pnl_wins_over_calculated_fallback(demo_df, demo_summary):
-    from dashboard_core.summary import register
+    from ui.callbacks.summary import register
 
     app = App()
     register(app)
@@ -80,8 +81,7 @@ def test_broker_zero_pnl_wins_over_calculated_fallback(demo_df, demo_summary):
 
 
 def test_selection_uses_sorted_viewport(monkeypatch):
-    from dashboard_core import detail
-
+    import ui.callbacks.detail as detail
     app = App()
     detail.register(app)
     monkeypatch.setattr(detail, 'ctx', SimpleNamespace(triggered_id='holdings-datatable'))
@@ -92,8 +92,7 @@ def test_selection_uses_sorted_viewport(monkeypatch):
 
 
 def test_each_browser_and_refresh_get_market_intelligence(monkeypatch):
-    from dashboard_core import intel
-
+    import ui.callbacks.intel as intel
     monkeypatch.setattr(intel, 'get_sector_geo', lambda _: {'X': {'sector': 'Technology'}})
     monkeypatch.setattr(intel, 'get_earnings_data', lambda _: {})
     app = App()
@@ -107,7 +106,7 @@ def test_each_browser_and_refresh_get_market_intelligence(monkeypatch):
 
 
 def test_performance_refresh_depends_on_existing_interval():
-    from dashboard_core.performance import register
+    from ui.callbacks.performance import register
 
     app = App()
     register(app)
@@ -164,8 +163,8 @@ def test_pdf_preserves_fractional_quantity_zero_and_missing_daily_pnl(demo_df, d
     asyncio.set_event_loop(asyncio.new_event_loop())
     from reportlab.platypus import Table
 
-    from dashboard_core import export
-
+    import ui.callbacks.export as export
+    from ui.reports import pdf as pdf_renderer
     cells = []
     original = Table.__init__
 
@@ -174,7 +173,7 @@ def test_pdf_preserves_fractional_quantity_zero_and_missing_daily_pnl(demo_df, d
         original(self, data, *args, **kwargs)
 
     monkeypatch.setattr(Table, '__init__', record)
-    monkeypatch.setattr(export, 'fetch_performance', lambda *args: None)
+    monkeypatch.setattr(pdf_renderer, 'fetch_performance', lambda *args: None)
     app = App()
     export.register(app)
     positions = demo_df.to_dict('records')
@@ -192,12 +191,12 @@ def test_pdf_preserves_fractional_quantity_zero_and_missing_daily_pnl(demo_df, d
 def test_portfolio_payload_forwards_broker_trades(demo_payload, monkeypatch):
     import asyncio
     asyncio.set_event_loop(asyncio.new_event_loop())
-    from dashboard_core import data_callbacks as callbacks
-
-    monkeypatch.setattr(callbacks, 'fetch_all_data', lambda: demo_payload)
-    monkeypatch.setattr(callbacks, 'is_demo_mode', lambda: True)
-    monkeypatch.setattr(callbacks, 'get_betas', lambda _: {})
-    monkeypatch.setattr(callbacks, 'get_dividend_data_yf', lambda _: {})
+    import backend.portfolio_service as service
+    import ui.callbacks.portfolio as callbacks
+    monkeypatch.setattr(service, 'fetch_all_data', lambda: demo_payload)
+    monkeypatch.setattr(service, 'is_demo_mode', lambda: True)
+    monkeypatch.setattr(service, 'get_betas', lambda _: {})
+    monkeypatch.setattr(service, 'get_dividend_data_yf', lambda _: {})
     app = App()
     callbacks.register(app)
     data, status = app.functions['fetch_data']()

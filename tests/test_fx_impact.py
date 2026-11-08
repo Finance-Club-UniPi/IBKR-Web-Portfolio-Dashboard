@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from data_processor import process_positions
-from demo_data import build_demo_payload
-from fx_impact import daily_fx_impact, fresh_quote_time, fx_session_open, previous_daily_close, quote_to_base
+from backend.portfolio.fx import (
+    daily_fx_impact,
+    fresh_quote_time,
+    fx_session_open,
+    previous_daily_close,
+    quote_to_base,
+)
+from backend.portfolio.positions import process_positions
+from backend.providers.demo import build_demo_payload
 
 
 def position(**changes):
@@ -68,7 +74,7 @@ def test_demo_path_and_numeric_sortable_column():
     assert df.loc[df.ticker == 'AAPL', 'fx_today'].iloc[0] < 0
     assert df['fx_today'].dtype.kind == 'f'
 
-    from dashboard_core.summary import register
+    from ui.callbacks.summary import register
 
     callbacks = {}
 
@@ -115,7 +121,7 @@ def _trade(side, shares, day, ticker='AAPL'):
 def test_open_lots_are_fifo_and_handle_partial_sells():
     from datetime import date
 
-    from fx_impact import open_lots
+    from backend.portfolio.fx import open_lots
 
     trades = [_trade('BUY', 10, '2026-01-05'), _trade('BUY', 10, '2026-02-05'),
               _trade('SELL', 15, '2026-03-05'), _trade('BUY', 1, '2026-03-06', 'MSFT')]
@@ -123,7 +129,7 @@ def test_open_lots_are_fifo_and_handle_partial_sells():
 
 
 def test_total_fx_from_trades_sums_lots():
-    from fx_impact import total_fx_from_trades
+    from backend.portfolio.fx import total_fx_from_trades
 
     rates = {'2026-01-05': 0.80, '2026-02-05': 0.85}
     rate_on = lambda d: rates[d.isoformat()]  # noqa: E731
@@ -133,7 +139,7 @@ def test_total_fx_from_trades_sums_lots():
 
 
 def test_total_fx_from_trades_reports_why_it_is_unavailable():
-    from fx_impact import total_fx_from_trades
+    from backend.portfolio.fx import total_fx_from_trades
 
     pos = total_position(ticker='AAPL')
     rate_on = lambda d: 0.8  # noqa: E731
@@ -148,7 +154,7 @@ def test_total_fx_from_trades_reports_why_it_is_unavailable():
 
 
 def test_merge_trades_dedupes_across_sources_but_keeps_repeat_fills():
-    from fx_impact import merge_trades
+    from backend.portfolio.fx import merge_trades
 
     live = [{'ticker': 'AAPL', 'side': 'BUY', 'shares': 5, 'price': 100.0, 'time': '2026-03-02T15:00:00+00:00'}]
     csv = [_trade('BUY', 5, '2026-03-02'), _trade('BUY', 5, '2026-03-02')]

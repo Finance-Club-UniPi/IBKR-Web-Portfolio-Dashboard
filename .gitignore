@@ -16,3 +16,6 @@ data/
 /.python-version
 /pyproject.toml
 /pyproject.toml.bak
+
+# Generated code graph (rebuild locally).
+/graphify-out/

@@ -78,40 +78,10 @@ Useful commands:
 
 ## Project structure
 
-```
-├── main.py               Entry point — starts IBKR thread and Dash server
-├── config.py             Config loader (YAML + env var overrides)
-├── ibkr_client.py        Persistent IB Gateway / TWS connection with exponential back-off & heartbeat
-├── demo_data.py          Deterministic sample portfolio used in demo mode
-├── dashboard.py          ~30-line orchestrator: creates app, wires layout + all module callbacks
-├── dashboard_core/
-│   ├── layout.py         Full app.layout HTML/dcc tree — build_layout(refresh_ms)
-│   ├── data_callbacks.py fetch_data, update_status, retry/demo toggles, keyboard shortcuts
-│   ├── summary.py        Summary cards, holdings table, allocation donut, dividends panel
-│   ├── detail.py         Position detail slide-out: stats, sparkline, trade CSV upload
-│   ├── intel.py          Toast, populate_market_intel store, sector/geo charts, earnings calendar
-│   ├── valuation.py      populate_valuation_data store, Buffett/CAPE/P-E/Treasury render
-│   ├── coach_ui.py       AI Coach panel: threads, chat, preset scenarios, LLM integration
-│   ├── export.py         PDF export callback
-│   └── helpers.py        section_label, make_table, badge, status_banner, to_eur, EURUSD_FALLBACK
-├── data_processor.py     Position calculations and enrichment
-├── analytics.py          Dividend data helpers (yfinance)
-├── market_intel.py       Sector/geo exposure and earnings calendar (yfinance)
-├── market_valuation.py   Macro indicators — Buffett, S&P 500 P/E, Shiller CAPE, 10-yr Treasury
-├── trade_history.py      CSV upload path for historical trades
-├── coach.py              Rules-based Portfolio Coach scenarios (no network)
-├── ai_provider.py        Optional LLM layer — Anthropic / xAI / OpenAI (BYO key)
-├── schemas.py            TypedDict definitions for all dcc.Store payloads
-├── decorators.py         @safe_render decorator and NotReadyError for callback error handling
-├── styles.py             Centralised colour palette and shared style dicts (CARD, badges, tables)
-├── cache_util.py         cached_fetch() — diskcache-backed TTL cache with in-memory fallback
-├── assets/custom.css     Dashboard CSS overrides
-├── config.yaml           Default configuration
-├── Dockerfile / docker-compose.yml
-├── install.ps1 / install.sh           One-liner installers
-├── start.* / stop.* / update.*        Helper scripts bundled in the release zip
-└── .github/workflows/                 CI: checks.yml, docker-publish.yml, release.yml
-```
+See [Finding and changing the code](ARCHITECTURE.md) for the current directory
+map, request flow, calculation conventions, and a task-to-file reference table.
+Backend code is under `backend/`; Dash callbacks, components, assets, and PDF
+renderers are under `ui/`. The launch command remains `python main.py`.
 
 ## Tech stack
 
@@ -126,7 +96,7 @@ Useful commands:
 
 ## CI / Docker Hub publishing
 
-**On every push to `main` and on pull requests:** `.github/workflows/checks.yml` installs deps, runs `ruff check .`, and runs `smoke_test.py`.
+**On every push to `main` and on pull requests:** `.github/workflows/checks.yml` installs deps, runs `ruff check .`, `smoke_test.py`, and `python -m pytest -q` on Python 3.12.
 
 **On every push to `main`:** `.github/workflows/docker-publish.yml` builds a multi-platform image (`linux/amd64` + `linux/arm64`) and pushes it to Docker Hub as `gmarinos/ibkrdash:latest`.
 

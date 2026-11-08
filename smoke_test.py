@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import sys
 
-from ai_provider import _strip_followups, detect_provider, provider_label
-from cache_util import cached_fetch
-from coach import SCENARIOS, render_scenario
-from data_processor import get_summary, process_positions
-from demo_data import build_demo_payload
-from market_valuation import buffett_zone, cape_zone, pe_zone, treasury_zone
+from backend.coaching.scenarios import SCENARIOS
+from backend.portfolio.positions import get_summary, process_positions
+from backend.providers.ai import _strip_followups, detect_provider, provider_label
+from backend.providers.demo import build_demo_payload
+from backend.providers.valuation import buffett_zone, cape_zone, pe_zone, treasury_zone
+from backend.storage.cache import cached_fetch
+from ui.components.scenarios import render_scenario
 
 _failed = 0
 

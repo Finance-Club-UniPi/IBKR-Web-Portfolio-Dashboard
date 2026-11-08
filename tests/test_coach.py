@@ -3,7 +3,8 @@
 import pytest
 from dash import html
 
-from coach import SCENARIOS, render_scenario
+from backend.coaching.scenarios import SCENARIOS
+from ui.components.scenarios import render_scenario
 
 
 def test_all_scenarios_registered():

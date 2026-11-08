@@ -3,10 +3,10 @@
 import pandas as pd
 import pytest
 
-import portfolio_history as ph
-from data_processor import get_summary, process_positions
-from demo_data import build_demo_payload
-from portfolio_history import build_value_series, compare_frame, parse_symbols
+import backend.portfolio.history as ph
+from backend.portfolio.history import build_value_series, compare_frame, parse_symbols
+from backend.portfolio.positions import get_summary, process_positions
+from backend.providers.demo import build_demo_payload
 
 DATES = ['2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08']
 
@@ -94,8 +94,7 @@ def test_parse_symbols():
 
 
 def test_demo_holdings_build_the_performance_figure(monkeypatch):
-    from dashboard_core import performance as perf
-
+    import ui.callbacks.performance as perf
     raw = build_demo_payload('balanced')
     df = process_positions(raw['positions'], raw['market_data'], base_currency='EUR',
                            daily_fx_rates=raw['daily_fx_rates'])
@@ -126,7 +125,7 @@ def test_demo_holdings_build_the_performance_figure(monkeypatch):
 
 
 def test_todays_pnl_card_shows_percentage_of_yesterdays_nlv():
-    from dashboard_core.summary import register
+    from ui.callbacks.summary import register
 
     callbacks = {}
 
@@ -163,8 +162,7 @@ def test_parse_symbols_accepts_picker_lists():
 
 
 def test_search_options_merge_results_selection_and_typed_symbol(monkeypatch):
-    from dashboard_core import performance as perf
-
+    import ui.callbacks.performance as perf
     hits = [{'symbol': 'AAPL', 'name': 'Apple Inc.', 'exchange': 'NASDAQ', 'type': 'Equity'},
             {'symbol': 'AAPL.TO', 'name': 'APPLE CDR', 'exchange': 'Toronto', 'type': 'Equity'}]
     monkeypatch.setattr(perf, 'search_instruments', lambda q: hits)
@@ -205,7 +203,7 @@ def test_search_instruments_handles_blank_and_failures(monkeypatch):
 def test_custom_bounds_and_clip_window():
     from datetime import date
 
-    from portfolio_history import clip_window, custom_bounds
+    from backend.portfolio.history import clip_window, custom_bounds
 
     assert custom_bounds(date(2026, 10, 19)) == (date(2021, 10, 19), date(2026, 10, 19))
     assert custom_bounds(date(2024, 2, 29))[0] == date(2019, 2, 28)
@@ -216,7 +214,7 @@ def test_custom_bounds_and_clip_window():
 
 
 def test_custom_range_builds_only_the_chosen_window(monkeypatch):
-    from dashboard_core.performance import build_performance
+    from ui.callbacks.performance import build_performance
 
     dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range('2026-01-01', periods=60)]
     history = {'AAA': entry(range(10, 70), dates)}

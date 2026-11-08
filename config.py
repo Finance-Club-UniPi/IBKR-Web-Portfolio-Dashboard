@@ -13,8 +13,12 @@ touching config.yaml, while local users keep the YAML-first workflow.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get('IBKRDASH_DATA_DIR') or PROJECT_ROOT / 'data')
 
 # Allow config.yaml to live elsewhere (useful for Docker volume mounts).
 _CONFIG_PATH = os.environ.get(

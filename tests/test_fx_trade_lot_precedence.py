@@ -4,8 +4,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-import fx_history
-from data_processor import process_positions
+import backend.providers.fx_history as fx_history
+from backend.portfolio.positions import process_positions
 
 
 class TestTradeLotFx(unittest.TestCase):

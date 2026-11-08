@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from dash import html
 
-import ai_provider
-import news_feed
-from coach import _ago, render_scenario
+import backend.providers.ai as ai_provider
+import backend.providers.news as news_feed
+from ui.components.scenarios import _ago, render_scenario
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
 

@@ -5,8 +5,9 @@ import asyncio
 import pandas as pd
 import pytest
 
-import pdf_report as pr
-from exposure import sector_geo_breakdown
+import backend.portfolio.report_data as pr
+from backend.portfolio.exposure import sector_geo_breakdown
+from ui.reports.charts import weekly_chart
 
 
 def series(values, end='2026-10-23'):
@@ -42,7 +43,7 @@ def test_period_returns_vs_benchmark_and_missing_history():
     value = series([100 + i for i in range(n)])
     bench = series([200.0] * n)
     rows = {label: (p, b) for label, p, b in pr.period_returns(value, bench)}
-    assert rows['1W'][0] == pytest.approx((value.iloc[-1] / value.asof(value.index[-1] - pd.Timedelta('7D')) - 1) * 100)
+    assert rows['1W'][0] == pytest.approx((value.iloc[-1] / value.asof(value.index[-1] - pd.Timedelta(days=7)) - 1) * 100)
     assert all(rows[k][1] == pytest.approx(0.0) for k in ('1W', '1M', '3M', 'YTD'))
     assert rows['1Y'] == (None, None)          # history starts well after a year ago
 
@@ -73,17 +74,17 @@ def test_weekly_chart_builds_a_drawing():
     pytest.importorskip('reportlab')
     frame = pr.weekly_frame(series([100, 102, 101, 103, 104, 105, 106, 108]),
                             series([50, 50, 51, 52, 51, 52, 53, 54]))
-    drawing = pr.weekly_chart(frame, 400, 150, {'Portfolio': '#378ADD', pr.BENCHMARK_NAME: '#f97316'})
+    drawing = weekly_chart(frame, 400, 150, {'Portfolio': '#378ADD', pr.BENCHMARK_NAME: '#f97316'})
     assert drawing.width == 400
 
 
 def test_export_pdf_end_to_end(demo_payload, demo_df, demo_summary, monkeypatch):
     pytest.importorskip('reportlab')
     asyncio.set_event_loop(asyncio.new_event_loop())   # eventkit (via ib_async) needs a loop at import
-    from dashboard_core import export
-
+    import ui.callbacks.export as export
+    from ui.reports import pdf as pdf_renderer
     value = series([100 + i for i in range(30)])
-    monkeypatch.setattr(export, 'fetch_performance',
+    monkeypatch.setattr(pdf_renderer, 'fetch_performance',
                         lambda positions, base: (value, series([200.0] * 30), [('VWCE', 'no price history')]))
     captured = {}
 
@@ -108,5 +109,5 @@ def test_export_pdf_end_to_end(demo_payload, demo_df, demo_summary, monkeypatch)
     assert raw.startswith(b'%PDF')
 
     # Still renders when history and market intel are both missing.
-    monkeypatch.setattr(export, 'fetch_performance', lambda positions, base: None)
+    monkeypatch.setattr(pdf_renderer, 'fetch_performance', lambda positions, base: None)
     assert captured['fn'](1, data, None)['filename'].endswith('.pdf')

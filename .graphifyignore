@@ -1,0 +1,53 @@
+# Local environments and installed packages
+.venv/
+venv/
+*.egg-info/
+.eggs/
+
+# Caches, compiled files, and build/test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+build/
+dist/
+
+# Local data, credentials, and runtime output
+/data/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+
+# Tool metadata and generated graphs
+.git/
+.agents/
+.codex/
+.claude/
+.aws/
+.idea/
+.vscode/
+graphify-out/
+
+# Backups, dependency lockfile, and binary artwork
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+/uv.lock
+*.png
+
+# Keep useful project configuration despite this repo's .gitignore rules
+!/pyproject.toml
+!/.python-version

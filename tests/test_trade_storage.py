@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import trade_history as trades
+import backend.storage.trades as trades
 
 
 @pytest.fixture

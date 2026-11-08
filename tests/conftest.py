@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
 
-from demo_data import build_demo_payload
+from backend.providers.demo import build_demo_payload
 
 
 @pytest.fixture(scope='session')
@@ -22,7 +22,7 @@ def demo_payload():
 
 @pytest.fixture(scope='session')
 def demo_df(demo_payload):
-    from data_processor import process_positions
+    from backend.portfolio.positions import process_positions
     return process_positions(
         demo_payload['positions'],
         demo_payload.get('market_data'),
@@ -31,5 +31,5 @@ def demo_df(demo_payload):
 
 @pytest.fixture(scope='session')
 def demo_summary(demo_df):
-    from data_processor import get_summary
+    from backend.portfolio.positions import get_summary
     return get_summary(demo_df)

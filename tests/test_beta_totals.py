@@ -2,8 +2,8 @@
 
 import pytest
 
-from data_processor import get_summary, portfolio_beta, process_positions
-from demo_data import build_demo_payload
+from backend.portfolio.positions import get_summary, portfolio_beta, process_positions
+from backend.providers.demo import build_demo_payload
 
 
 def build(betas, portfolio='balanced'):
@@ -60,7 +60,7 @@ def test_fx_total_is_none_when_no_position_has_an_estimate():
 
 
 def test_ui_renders_cards_and_beta_column():
-    from dashboard_core.summary import register
+    from ui.callbacks.summary import register
 
     callbacks = {}
 

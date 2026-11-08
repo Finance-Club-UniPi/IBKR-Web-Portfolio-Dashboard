@@ -11,12 +11,12 @@ Docker notes
 from __future__ import annotations
 
 # Fail early and clearly on unsupported Python rather than crashing later with a
-# cryptic AttributeError. 3.10 is the floor ib_async 2.x requires.
+# cryptic import error. Keep this aligned with pyproject.toml and CI.
 import sys
 
-if sys.version_info < (3, 10):  # noqa: UP036  intentional runtime floor check
+if sys.version_info < (3, 12):  # noqa: UP036  intentional runtime floor check
     raise SystemExit(
-        f"This app needs Python 3.10 or newer — you're on "
+        f"This app needs Python 3.12 or newer — you're on "
         f"{sys.version_info.major}.{sys.version_info.minor}. "
         "Install a newer Python (or run the Docker image, which bundles 3.12)."
     )
@@ -30,9 +30,9 @@ import logging
 import os
 import threading
 
+from backend.providers.ibkr import save_connection_params, set_demo_mode, start_connection
 from config import cfg
-from dashboard import app
-from ibkr_client import save_connection_params, set_demo_mode, start_connection
+from ui.app import app
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 # Set LOG_FORMAT=json in the environment (or in Docker) to emit newline-
@@ -113,13 +113,13 @@ if __name__ == '__main__':
     # user sees the connecting/loading screen instead of a 30-second shimmer.
     def _prewarm_valuation():
         try:
-            from market_valuation import (
+            from backend.network import run_parallel
+            from backend.providers.valuation import (
                 get_buffett_indicator,
                 get_shiller_cape,
                 get_sp500_pe,
                 get_treasury_yield,
             )
-            from net_util import run_parallel
             run_parallel({
                 'buffett':  get_buffett_indicator,
                 'sp500_pe': get_sp500_pe,

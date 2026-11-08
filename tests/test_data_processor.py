@@ -64,6 +64,6 @@ def test_best_and_worst_performer_present(demo_summary):
 
 
 def test_empty_dataframe_returns_empty_dict():
-    from data_processor import get_summary
+    from backend.portfolio.positions import get_summary
     summary = get_summary(pd.DataFrame())
     assert summary == {}
