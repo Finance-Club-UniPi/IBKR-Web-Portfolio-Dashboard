@@ -63,7 +63,7 @@ def test_demo_path_and_numeric_sortable_column():
     raw = build_demo_payload('balanced')
     df = process_positions(raw['positions'], raw['market_data'],
                            base_currency=raw['account']['base_currency'],
-                           daily_fx_rates=raw['daily_fx_rates'])
+                           trade_fx=raw['trade_fx'], daily_fx_rates=raw['daily_fx_rates'])
     assert df.loc[df.ticker == 'ASML', 'fx_today'].iloc[0] == 0
     assert df.loc[df.ticker == 'AAPL', 'fx_today'].iloc[0] < 0
     assert df['fx_today'].dtype.kind == 'f'
@@ -98,38 +98,10 @@ def total_position(**changes):
     return result
 
 
-def test_total_fx_impact_matches_closed_form():
-    from fx_impact import total_fx_impact
-
-    # q * P1 * (X1 - X0) = 10 * 120 * (0.90 - 0.80)
-    assert total_fx_impact(total_position(), 'EUR') == (120.0, '')
-    # Cross-check against a fresh rate passes when units agree (10 * 120 * 0.90 = 1080).
-    assert total_fx_impact(total_position(), 'EUR', {'USD': {'now': 0.90, 'previous': 0.89}}) == (120.0, '')
-    # Short positions keep the sign convention: FX loss on a short when the USD rises.
-    short = total_position(quantity=-10, base_market_value=-1080.0, base_unrealized_pnl=-280.0)
-    assert total_fx_impact(short, 'EUR')[0] == -120.0
-
-
-def test_total_fx_impact_unavailable_inputs():
-    from fx_impact import total_fx_impact
-
-    assert total_fx_impact(total_position(currency='EUR'), 'EUR') == (0.0, 'No currency conversion')
-    for changes in (dict(base_market_value=None), dict(base_unrealized_pnl=float('nan')),
-                    dict(avg_cost=0), dict(fx_native_price=None), dict(price_unit_verified=False),
-                    dict(multiplier=None), dict(fx_price_stale=True),
-                    dict(base_market_value=1080.0, base_unrealized_pnl=1080.0)):
-        value, reason = total_fx_impact(total_position(**changes), 'EUR')
-        assert value is None and reason, changes
-    # Base value in the wrong units (e.g. USD, not EUR) is rejected by the rate cross-check.
-    value, reason = total_fx_impact(total_position(base_market_value=1200.0), 'EUR',
-                                    {'USD': {'now': 0.90, 'previous': 0.89}})
-    assert value is None and 'does not match' in reason
-
-
 def test_demo_total_fx_matches_price_times_rate_move():
     raw = build_demo_payload('balanced')
     df = process_positions(raw['positions'], raw['market_data'], base_currency='EUR',
-                           daily_fx_rates=raw['daily_fx_rates'])
+                           trade_fx=raw['trade_fx'], daily_fx_rates=raw['daily_fx_rates'])
     aapl = df[df.ticker == 'AAPL'].iloc[0]
     assert aapl['fx_total'] == pytest.approx(60 * 195.5 * (1 / 1.08 - 1 / 1.12), abs=0.5)
     assert df.loc[df.ticker == 'ASML', 'fx_total'].iloc[0] == 0

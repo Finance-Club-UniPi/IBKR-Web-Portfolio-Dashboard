@@ -46,8 +46,8 @@ class SummaryData(TypedDict):
     total_value: float
     total_unrealized_pnl: float
     num_positions: int
-    largest_position: str
-    largest_position_pct: float
+    largest_position: str | None
+    largest_position_pct: float | None
     best_performer: str
     worst_performer: str
     total_pnl_pct: NotRequired[float | None]
@@ -65,7 +65,7 @@ class SummaryData(TypedDict):
 class AccountData(TypedDict, total=False):
     base_currency: str
     portfolio_value_units: str
-    cash_eur: float
+    cash_base: float
     net_liquidation: float
     gross_position_value: float
     eurusd_rate: float
@@ -76,6 +76,7 @@ class PortfolioData(TypedDict):
     summary: SummaryData
     positions: list[PositionData]
     account: AccountData
+    trades: NotRequired[list[dict]]
     div_data: NotRequired[dict]
 
 

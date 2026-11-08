@@ -16,9 +16,12 @@ shown elsewhere on the dashboard.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from dash import html
+
+from exposure import sector_geo_breakdown
 
 # ── Presentation helpers ──────────────────────────────────────────────────────
 
@@ -50,9 +53,17 @@ def _not_ready(reason: str):
                    tone='info')
 
 
-def _fmt_eur(v: float) -> str:
+def _fmt_money(v: float, port) -> str:
+    account = port.get('account') or {}
+    if account.get('portfolio_value_units') != 'base':
+        return 'unavailable (unverified currency units)'
+    currency = account.get('base_currency') or 'unknown currency'
     sign = '-' if v < 0 else ''
-    return f"{sign}€{abs(v):,.0f}"
+    return f"{sign}{abs(v):,.0f} {currency}"
+
+
+def _weight_text(value):
+    return f'{value:.1f}%' if value is not None and math.isfinite(value) else 'weight unavailable'
 
 
 def _fmt_pct(v: float) -> str:
@@ -82,14 +93,14 @@ def scenario_performance(port, _intel, _val):
 
     tone = 'good' if pnl_pct >= 0 else 'warn'
     lines = [
-        f"Portfolio value: {_fmt_eur(total)} · Unrealised P&L: "
-        f"{_fmt_eur(pnl)} ({_fmt_pct(pnl_pct)} on cost).",
+        f"Portfolio value: {_fmt_money(total, port)} · Unrealised P&L: "
+        f"{_fmt_money(pnl, port)} ({_fmt_pct(pnl_pct)} on cost).",
         f"Biggest winner: {best} ({_fmt_pct(best_pct)}). "
         + (f"Biggest drag: {worst} ({_fmt_pct(worst_pct)})."
            if losers else "No losers today — every position is in the green, which is a good reminder that this won't always be the case."),
     ]
     if daily is not None:
-        lines.append(f"Today's move: {_fmt_eur(daily)}.")
+        lines.append(f"Today's move: {_fmt_money(daily, port)}.")
 
     headline = ("Good shape — up overall." if pnl_pct >= 0
                 else "Down overall — worth reviewing which positions are dragging.")
@@ -102,23 +113,16 @@ def scenario_biggest_risk(port, intel, val):
 
     s       = port['summary']
     top     = s.get('largest_position', '—')
-    top_pct = s.get('largest_position_pct', 0)
+    top_pct = s.get('largest_position_pct')
+    if top_pct is None or not math.isfinite(top_pct):
+        return _not_ready('Verified base-currency holding weights are unavailable.')
 
     # Sector concentration (reuses the same exposure market-intel builds)
     top_sector_name, top_sector_pct = None, 0
     if intel and intel.get('sector_geo'):
-        sector_pct: dict[str, float] = {}
-        for p in port['positions']:
-            sg = intel['sector_geo'].get(p['ticker'], {})
-            w  = p.get('allocation_pct', 0)
-            sw = sg.get('sector_weights') or {}
-            if sw:
-                for sec, frac in sw.items():
-                    sector_pct[sec] = sector_pct.get(sec, 0) + w * frac / 100.0
-            elif sg.get('sector'):
-                sector_pct[sg['sector']] = sector_pct.get(sg['sector'], 0) + w
-        if sector_pct:
-            top_sector_name, top_sector_pct = max(sector_pct.items(), key=lambda kv: kv[1])
+        sectors, _ = sector_geo_breakdown(port['positions'], intel['sector_geo'])
+        if sectors:
+            top_sector_name, top_sector_pct, _ = sectors[0]
 
     # Valuation context — CAPE and Buffett, if available
     cape_val = (val or {}).get('cape', {}).get('value') if val else None
@@ -173,20 +177,17 @@ def scenario_what_if(port, _intel, _val):
     if not port or not port.get('positions'):
         return _not_ready("Positions haven't loaded yet.")
 
-    positions = sorted(port['positions'],
-                       key=lambda p: p.get('market_value', 0), reverse=True)
-    top = positions[0]
-    total_value = port['summary'].get('total_value', 0) or 1
-
-    # Convert SPPE (EUR) vs USD positions using the saved EUR/USD rate.
-    # portfolio-data positions store market_value in their native currency,
-    # so we don't know for sure — but account.gross_position_value is in EUR.
-    # We approximate "impact on portfolio" as share * 20%.
+    positions = port['positions']
+    if any(p.get('allocation_pct') is None or not math.isfinite(p['allocation_pct'])
+           or p['allocation_pct'] < 0 for p in positions):
+        return _not_ready('Verified base-currency holding weights are unavailable.')
+    top = max(positions, key=lambda p: p['allocation_pct'])
+    total_value = sum(p['base_market_value'] for p in positions)
     share = top.get('allocation_pct', 0) / 100.0
     impact_pct = share * 20.0
     impact_eur = total_value * share * 0.20
 
-    headline = f"If {top['ticker']} drops 20%, you'd lose about {_fmt_eur(impact_eur)}."
+    headline = f"If {top['ticker']} drops 20%, you'd lose about {_fmt_money(impact_eur, port)}."
     body = [
         f"That's roughly {impact_pct:.1f}% of your total portfolio value.",
         "The rest of your holdings wouldn't automatically offset that — they move somewhat independently.",
@@ -217,23 +218,11 @@ def scenario_sector_geo(port, intel, _val):
     if not intel or not intel.get('sector_geo'):
         return _not_ready("Market-intelligence data (sector / geography) is still loading.")
 
-    # Aggregate by sector (using ETF weights when available) and by country
-    sector_pct: dict[str, float] = {}
-    country_pct: dict[str, float] = {}
-    for p in port['positions']:
-        sg = intel['sector_geo'].get(p['ticker'], {})
-        w  = p.get('allocation_pct', 0)
-        sw = sg.get('sector_weights') or {}
-        if sw:
-            for sec, frac in sw.items():
-                sector_pct[sec] = sector_pct.get(sec, 0) + w * frac / 100.0
-        elif sg.get('sector'):
-            sector_pct[sg['sector']] = sector_pct.get(sg['sector'], 0) + w
-        country = sg.get('country') or 'Unknown'
-        country_pct[country] = country_pct.get(country, 0) + w
-
-    top_sectors = sorted(sector_pct.items(), key=lambda kv: kv[1], reverse=True)[:3]
-    top_countries = sorted(country_pct.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    sectors, countries = sector_geo_breakdown(port['positions'], intel['sector_geo'])
+    if not sectors:
+        return _not_ready('Verified base-currency holding weights are unavailable.')
+    top_sectors = [(name, weight) for name, weight, _ in sectors[:3]]
+    top_countries = countries[:3]
 
     sec_str = ", ".join(f"{name} {pct:.0f}%" for name, pct in top_sectors) or "—"
     geo_str = ", ".join(f"{name} {pct:.0f}%" for name, pct in top_countries) or "—"
@@ -317,7 +306,7 @@ def scenario_news(port, intel, _val):
     if news is None:
         return _not_ready("Headlines haven't loaded yet (Yahoo Finance may be unreachable).")
 
-    ranked = sorted(port['positions'], key=lambda p: p.get('allocation_pct') or 0, reverse=True)
+    ranked = sorted(port['positions'], key=lambda p: p.get('allocation_pct') if p.get('allocation_pct') is not None and math.isfinite(p['allocation_pct']) else 0, reverse=True)
     sections, empty = [], []
     for p in ranked:
         items = news.get(p['ticker']) or []
@@ -326,7 +315,7 @@ def scenario_news(port, intel, _val):
             continue
         sections.append(html.Div([
             html.P([html.Span(p['ticker'], style={'fontWeight': '700'}),
-                    html.Span(f"  {p.get('allocation_pct') or 0:.1f}% of portfolio",
+                    html.Span(f"  {_weight_text(p.get('allocation_pct'))} of portfolio",
                               style={'color': '#6b7280', 'fontWeight': '400', 'fontSize': '13px'})],
                    style={'margin': '0 0 6px', 'fontSize': '15px', 'color': '#111827'}),
             *[html.Div([

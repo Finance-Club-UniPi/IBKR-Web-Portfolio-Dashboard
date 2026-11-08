@@ -3,7 +3,7 @@
 The portfolio history is a *backcast*: today's quantities held constant over
 the window, valued at historical closes and converted to the account base
 currency with daily FX.  It is not a record of what the account was actually
-worth (no trade history, no cash, no dividends in cash), and says so in the UI.
+worth (no trade history or cash; dividend-adjusted prices), and says so in the UI.
 
 `build_value_series` and `compare_frame` are pure; the network lives in
 `get_portfolio_history` / `get_compare_history`, which reuse the shared 4-hour

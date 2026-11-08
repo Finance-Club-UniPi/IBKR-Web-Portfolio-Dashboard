@@ -71,59 +71,6 @@ def fx_session_open(now=None) -> bool:
     return not (17 * 60 <= minute < 17 * 60 + 15)
 
 
-def total_fx_impact(position: dict, base_currency: str, rates: dict | None = None) -> tuple[float | None, str]:
-    """Since-purchase currency translation effect in base currency.
-
-    Needs the position's base-currency market value and unrealized P&L (IBKR
-    per-position P&L, which embeds the FX rate at purchase).  With
-    ``cost_base = value_base - unrealized_base`` and the native price/cost ratio
-    ``r = price / unit_cost``, the price move at the purchase-time rate is
-    ``(r - 1) * cost_base``, so the rest is FX::
-
-        fx = value_base - r * cost_base
-
-    As in the daily estimate, the price/FX cross-term is assigned to FX.  When a
-    fresh FX rate is available the base value is cross-checked against
-    ``quantity * multiplier * native_price * rate`` to catch unit mismatches.
-    """
-    currency = str(position.get('currency') or '').upper()
-    base = str(base_currency or '').upper()
-    if not currency or not base:
-        return None, 'Instrument or account currency is unavailable'
-    if currency == base:
-        return 0.0, 'No currency conversion'
-    native_price = position.get('fx_native_price')
-    if position.get('fx_price_stale') or not valid_positive(native_price):
-        return None, 'Current position price is missing or stale'
-    if not position.get('price_unit_verified', False):
-        return None, 'Native price units are unverified for this contract'
-    multiplier = position.get('multiplier')
-    if not valid_positive(multiplier):
-        return None, 'Contract multiplier is unavailable'
-    avg_cost = position.get('avg_cost')
-    if not valid_positive(avg_cost):
-        return None, 'Average cost is unavailable'
-    try:
-        value_base = float(position['base_market_value'])
-        unreal_base = float(position['base_unrealized_pnl'])
-        quantity = float(position['quantity'])
-    except (KeyError, TypeError, ValueError):
-        return None, 'Base-currency position value or P&L is unavailable'
-    if not all(math.isfinite(v) for v in (value_base, unreal_base, quantity)) or not quantity:
-        return None, 'Base-currency position value or P&L is unavailable'
-    rate = (rates or {}).get(currency)
-    if rate and valid_positive(rate.get('now')):
-        expected = quantity * float(multiplier) * float(native_price) * float(rate['now'])
-        if not expected or abs(value_base / expected - 1) > 0.03:
-            return None, 'Base-currency value does not match the native price and FX rate'
-    cost_base = value_base - unreal_base
-    if not cost_base:
-        return None, 'Base-currency cost is unavailable'
-    ratio = float(native_price) / (float(avg_cost) / float(multiplier))
-    value = value_base - ratio * cost_base
-    return (round(value, 2), '') if math.isfinite(value) else (None, 'Invalid FX estimate')
-
-
 def _trade_date(trade) -> date | None:
     try:
         return date.fromisoformat(str(trade.get('time'))[:10])

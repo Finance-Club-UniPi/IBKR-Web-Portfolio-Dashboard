@@ -174,7 +174,7 @@ def register(app):
             div_data.update(_div_fut.result())
         betas = _beta_fut.result() if _beta_fut.done() and not _beta_fut.exception() else {}
         trade_fx = (_fx_fut.result() if _fx_fut is not None and _fx_fut.done()
-                    and not _fx_fut.exception() else {})
+                    and not _fx_fut.exception() else raw.get('trade_fx', {}))
 
         df = process_positions(
             raw['positions'], raw.get('market_data', {}),
@@ -191,6 +191,7 @@ def register(app):
             'summary':   summary,
             'account':   raw['account'],
             'div_data':  div_data,
+            'trades':    raw.get('trades', []),
         }, 'connected'
 
     # ── Status banner + connection badge ──────────────────────────────────────

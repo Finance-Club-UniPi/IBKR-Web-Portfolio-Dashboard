@@ -72,7 +72,9 @@ def register(app):
 
         total_val  = s['total_value']
         unreal_pnl = s['total_unrealized_pnl']
-        daily_pnl  = a.get('daily_pnl') or s.get('total_daily_pnl')
+        daily_pnl  = a.get('daily_pnl')
+        if daily_pnl is None and portfolio_values_base:
+            daily_pnl = s.get('total_daily_pnl')
         cash_base  = a.get('cash_base', 0)
         pnl_pct    = s.get('total_pnl_pct')
 
@@ -152,7 +154,8 @@ def register(app):
                  total_base, verified_base=portfolio_values_base),
             card("Unrealized P&L" if portfolio_values_base else "Unrealized P&L (TWS units)",
                  unreal_pnl, pnl_pct=pnl_pct, is_pnl=True, verified_base=portfolio_values_base),
-            card("Today's P&L",    daily_pnl if daily_pnl is not None else 0, pnl_pct=daily_pct, is_pnl=True,
+            card("Today's P&L",    daily_pnl, pnl_pct=daily_pct, is_pnl=True,
+                 value_text='—' if daily_pnl is None else None,
                  title="Today's change as a percentage of yesterday's net liquidation value "
                        "(current net liquidation minus today's P&L)."),
             card("Cash",           cash_base, note=f"{cash_pct:.1f}% of portfolio" if cash_pct is not None else None),
@@ -166,8 +169,8 @@ def register(app):
                  value_text='—' if fx_all is None else None,
                  note=f"{fx_all_n} of {n_positions} positions",
                  title="Sum of the per-holding 'FX total' column: estimated effect of currency moves "
-                       "since you bought, in account base currency — from IBKR's base-currency P&L, or "
-                       "rebuilt from trade history when that is unavailable. The price/FX cross-term "
+                       "since you bought, in account base currency, rebuilt from complete trade history "
+                       "using daily purchase-date FX closes. The price/FX cross-term "
                        "is assigned to FX."),
             card("FX today", fx_total, is_pnl=fx_total is not None,
                  value_text='—' if fx_total is None else None,
@@ -223,7 +226,7 @@ def register(app):
             return f"~{row['current_price']:,.2f}"
 
         df['price_display'] = df.apply(_price_display, axis=1)
-        df['weight_display']    = df['allocation_pct'].apply(lambda v: f"{v:.1f}%")
+        df['weight_display']    = df['allocation_pct'].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else '—')
         df['pnl_pct_display']   = df['pnl_pct'].apply(lambda v: f"{v:+.2f}%")
         for col in ('beta', 'fx_total'):
             if col not in df.columns:
@@ -279,11 +282,9 @@ def register(app):
             data=table_data,
             tooltip_header={'fx_total': (
                 'Estimated effect of currency moves since purchase on this position, in account base '
-                'currency. IBKR’s base-currency P&L embeds the FX rate at purchase; the price move at that '
-                'rate is removed and the remainder is FX (the price/FX cross-term is assigned to FX). '
-                'When TWS reports base P&L in instrument-currency units, it is instead rebuilt from live + '
-                'uploaded trade history (FIFO lots × Yahoo daily FX closes on each purchase date), which is '
-                'approximate. — means neither source is available; hover a cell for the reason.'
+                'currency. Rebuilt from complete trade history using FIFO lots and Yahoo daily FX closes '
+                'on each purchase date. The price/FX cross-term is assigned to FX. This is approximate; '
+                '— means the lot history or required prices/rates are unavailable.'
             ), 'fx_today': (
                 'Estimated effect of today’s FX move on the current position, in account base currency. '
                 'Current native price × quantity × multiplier × (FX now − previous FX daily close). '
@@ -366,16 +367,15 @@ def register(app):
                 html.Div(className='skeleton-block', style={'height': '11px', 'width': '60%', 'margin': '0 auto'}),
             ])
         df = pd.DataFrame(data['positions'])
+        if df['allocation_pct'].isna().any() or (df['allocation_pct'] < 0).any():
+            return html.P('Allocation unavailable: verified base-currency values for long holdings are required.')
         colors = [COLOR_BRAND, COLOR_WARN_SOFT, '#a855f7', COLOR_GOOD_SOFT, COLOR_WARN_YELLOW, '#ec4899', '#14b8a6']
-        fig = px.pie(df, values='market_value', names='ticker', hole=0.68,
+        fig = px.pie(df, values='allocation_pct', names='ticker', hole=0.68,
                      color_discrete_sequence=colors)
-        account = data.get('account', {})
-        base_ccy = account.get('base_currency', 'EUR')
-        value_units = base_ccy if account.get('portfolio_value_units') == 'base' else 'TWS units'
         fig.update_traces(
             textposition='none',
             textinfo='none',
-            hovertemplate=f'<b>%{{label}}</b><br>%{{value:,.2f}} {value_units}  ·  %{{percent}}<extra></extra>',
+            hovertemplate='<b>%{label}</b><br>%{percent}<extra></extra>',
         )
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0),

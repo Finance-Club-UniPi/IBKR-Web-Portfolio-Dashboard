@@ -23,6 +23,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from config import cfg
+from fx_impact import total_fx_from_trades
 
 # ── Portfolio registry — exposed to the UI for the switcher ─────────────────
 DEMO_PORTFOLIOS: list[dict] = [
@@ -281,6 +282,10 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     market_data = {k: dict(v) for k, v in _MARKET_DATA.items() if k in tickers}
 
     return {
+        'trade_fx': {p['ticker']: total_fx_from_trades(
+            p, 'EUR', [{'ticker': p['ticker'], 'side': 'BUY', 'shares': p['quantity'],
+                        'time': '2020-01-01'}],
+            lambda _day: 1 / _DEMO_COST_EURUSD, 1 / 1.08) for p in positions},
         'positions':   positions,
         'market_data': market_data,
         # Demo-only spot and previous daily midpoint, both EUR per USD.

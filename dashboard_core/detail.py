@@ -836,7 +836,7 @@ def register(app):
         Input('holdings-datatable', 'active_cell'),
         Input('kb-escape-btn', 'n_clicks'),   # triggered when user presses Escape
         Input({'type': 'position-close', 'index': ALL}, 'n_clicks'),
-        State('holdings-datatable', 'data'),
+        State('holdings-datatable', 'derived_viewport_data'),
         State('selected-ticker', 'data'),
         prevent_initial_call=True,
     )

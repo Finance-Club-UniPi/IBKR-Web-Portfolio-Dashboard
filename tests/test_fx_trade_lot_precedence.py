@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import fx_history
 from data_processor import process_positions
-from fx_impact import total_fx_impact
 
 
 class TestTradeLotFx(unittest.TestCase):
@@ -29,7 +28,8 @@ class TestTradeLotFx(unittest.TestCase):
             complete = fx_history.compute_trade_fx([position], 'EUR', trades, daily_fx_rates=rates)
             incomplete = fx_history.compute_trade_fx([position], 'EUR', trades[:1], daily_fx_rates=rates)
 
-        self.assertEqual(total_fx_impact(position, 'EUR', rates), (80.0, ''))
+        pending = process_positions([position], base_currency='EUR', daily_fx_rates=rates)
+        self.assertTrue(pending['fx_total'].isna().all())
         self.assertEqual(complete['AAPL'], (90.0, ''))
 
         result = process_positions(

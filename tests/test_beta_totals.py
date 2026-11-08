@@ -10,7 +10,7 @@ def build(betas, portfolio='balanced'):
     raw = build_demo_payload(portfolio)
     return process_positions(raw['positions'], raw['market_data'],
                              base_currency=raw['account']['base_currency'],
-                             daily_fx_rates=raw['daily_fx_rates'], betas=betas)
+                             trade_fx=raw['trade_fx'], daily_fx_rates=raw['daily_fx_rates'], betas=betas)
 
 
 def test_beta_column_maps_by_ticker_and_defaults_to_nan():

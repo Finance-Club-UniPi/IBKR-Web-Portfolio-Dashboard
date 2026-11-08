@@ -15,7 +15,7 @@ import math
 
 import pandas as pd
 
-from fx_impact import daily_fx_impact, total_fx_impact
+from fx_impact import daily_fx_impact
 
 
 def process_positions(positions, market_data=None, *, base_currency='EUR', daily_fx_rates=None,
@@ -102,19 +102,19 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
           for _, row in df.iterrows()]
     df['fx_today'] = [value for value, _ in fx]
     df['fx_today_reason'] = [reason for _, reason in fx]
-    fx_total = [total_fx_impact(row.to_dict(), base_currency, daily_fx_rates)
-                for _, row in df.iterrows()]
-    # Average cost and aggregate base P&L cannot recover each purchase's FX rate.
-    # Prefer the trade-lot estimate whenever trade history was evaluated.
+    fx_total = []
+    # Only complete trade-lot estimates can supply since-purchase FX.
     sources = []
-    for i, ticker in enumerate(df['ticker']):
+    for _, row in df.iterrows():
+        ticker = row['ticker']
         if ticker in trade_fx:
             value, reason = trade_fx[ticker]
             source = 'trade history'
+        elif str(row.get('currency') or '').upper() == base_currency.upper():
+            value, reason, source = 0.0, 'No currency conversion', None
         else:
-            value, reason = fx_total[i]
-            source = 'IBKR base P&L'
-        fx_total[i] = (value, reason)
+            value, reason, source = None, 'Trade-history FX estimate is not available yet', None
+        fx_total.append((value, reason))
         sources.append(source if value is not None else None)
     df['fx_total'] = pd.Series([value for value, _ in fx_total], index=df.index, dtype='float64')
     df['fx_total_reason'] = [reason for _, reason in fx_total]
@@ -137,10 +137,12 @@ def portfolio_beta(df):
     base_values = _verified_base_values(df)
     if base_values is None:
         return None, 0.0, 0
+    if (base_values < 0).any():
+        return None, 0.0, 0
     total = base_values.sum()
     if not math.isfinite(float(total)) or total <= 0:
         return None, 0.0, 0
-    known_mask = df['beta'].notna() & (base_values > 0)
+    known_mask = df['beta'].apply(lambda v: pd.notna(v) and math.isfinite(float(v))) & (base_values > 0)
     known = df.loc[known_mask]
     covered_values = base_values[known_mask]
     covered = covered_values.sum()

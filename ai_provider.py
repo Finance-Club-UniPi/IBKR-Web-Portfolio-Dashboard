@@ -19,6 +19,7 @@ than a 200 with a parseable body.
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import requests
@@ -311,6 +312,14 @@ LLM_PROMPTS = [
 
 # ── Compact context builder ───────────────────────────────────────────────────
 
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
 def build_portfolio_context(port, intel, val, trades=None) -> str:
     """
     Build a compact JSON blob with everything the LLM needs. Kept small so
@@ -319,15 +328,20 @@ def build_portfolio_context(port, intel, val, trades=None) -> str:
     compact = {}
     if port:
         summary = port.get('summary', {}) or {}
+        acct = port.get('account') or {}
         compact['summary'] = {
-            'total_value_eur':       summary.get('total_value'),
-            'unrealised_pnl_eur':    summary.get('total_unrealized_pnl'),
+            'value_units': acct.get('portfolio_value_units', 'unverified'),
+            'base_currency': acct.get('base_currency'),
+            'total_value':       summary.get('total_value'),
+            'unrealised_pnl':    summary.get('total_unrealized_pnl'),
             'unrealised_pnl_pct':    summary.get('total_pnl_pct'),
             'num_positions':         summary.get('num_positions'),
             'largest_position':      summary.get('largest_position'),
             'largest_position_pct':  summary.get('largest_position_pct'),
         }
         compact['positions'] = [{
+            'currency': p.get('currency'),
+            'value_units': acct.get('portfolio_value_units', 'unverified'),
             'ticker':        p.get('ticker'),
             'qty':           p.get('quantity'),
             'avg_cost':      p.get('avg_cost'),
@@ -339,8 +353,9 @@ def build_portfolio_context(port, intel, val, trades=None) -> str:
         } for p in port.get('positions', [])]
         acct = port.get('account') or {}
         compact['account'] = {
-            'cash_eur':     acct.get('cash_eur'),
-            'net_liq_eur':  acct.get('net_liquidation'),
+            'base_currency': acct.get('base_currency'),
+            'cash_base': acct.get('cash_base'),
+            'net_liquidation_base':  acct.get('net_liquidation'),
             'eurusd_rate':  acct.get('eurusd_rate'),
         }
     if intel and intel.get('sector_geo'):
@@ -372,7 +387,7 @@ def build_portfolio_context(port, intel, val, trades=None) -> str:
             'time':   t.get('time'),
             'value':  t.get('value'),
         } for t in recent]
-    return json.dumps(compact, separators=(',', ':'))
+    return json.dumps(_json_safe(compact), separators=(',', ':'), allow_nan=False)
 
 
 def build_news_context(news: dict | None, port: dict | None, per_ticker: int = 3) -> str:

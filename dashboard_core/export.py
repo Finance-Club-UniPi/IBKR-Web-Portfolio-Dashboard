@@ -15,12 +15,12 @@ import pandas as pd
 from dash import Input, Output, State, dcc, no_update
 
 from dashboard_core.helpers import EURUSD_FALLBACK, ccy_symbol, to_base
+from exposure import sector_geo_breakdown
 from ibkr_client import is_demo_mode
 from pdf_report import (
     BENCHMARK_NAME,
     fetch_performance,
     period_returns,
-    sector_geo_breakdown,
     short_sector,
     weekly_chart,
     weekly_frame,
@@ -135,10 +135,14 @@ def register(app):
         total_val   = s.get('total_value', 0)
         unreal_pnl  = s.get('total_unrealized_pnl', 0)
         real_pnl    = s.get('total_realized_pnl', 0) or 0
-        daily_pnl   = a.get('daily_pnl') or s.get('total_daily_pnl', 0) or 0
+        daily_pnl   = a.get('daily_pnl')
+        if daily_pnl is None and values_base:
+            daily_pnl = s.get('total_daily_pnl')
         def _base(v, verified=values_base):
             return f"{sym if verified else ''}{v:,.2f}"
         def _base_signed(v, verified=values_base):
+            if v is None:
+                return '—'
             return f"{sym if verified else ''}{v:+,.2f}"
         def _sec(v):
             if not values_base or base_ccy not in ('USD', 'EUR'):
@@ -153,7 +157,7 @@ def register(app):
             ['Realized P&L',   _base_signed(real_pnl),   _sec(real_pnl)],
             ["Today's P&L",    _base_signed(daily_pnl, verified=True),
                               f"{sec_sym}{daily_pnl / rate if base_ccy == 'USD' else daily_pnl * rate:,.2f}"
-                              if base_ccy in ('EUR', 'USD') and rate else '—'],
+                              if daily_pnl is not None and base_ccy in ('EUR', 'USD') and rate else '—'],
             ['Cash',           f"{sym}{a.get('cash_base', 0):,.2f}",
                                f"${a.get('cash_usd', 0) or 0:,.2f}"],
         ]
@@ -203,7 +207,7 @@ def register(app):
         cost_basis = total_val - unreal_pnl
         if total_pct is None and cost_basis:
             total_pct = unreal_pnl / cost_basis * 100
-        prior_val = total_val - daily_pnl
+        prior_val = total_val - daily_pnl if daily_pnl is not None else None
         today_pct = daily_pnl / prior_val * 100 if values_base and prior_val else None
         best   = s.get('best_performer', '—')
         worst  = s.get('worst_performer', '—')
@@ -276,7 +280,7 @@ def register(app):
             perf.append(Spacer(1, 3*mm))
             perf.append(rt)
             note = (f"Portfolio = today's holdings valued at historical closes in {base_ccy} "
-                    f"(cash, past trades and dividends excluded). {BENCHMARK_NAME} is the price "
+                    f"(cash and past trades excluded; prices include dividend adjustments). {BENCHMARK_NAME} is the price "
                     "index in USD.")
             if excluded:
                 note += " Not included (no usable price history): " + ', '.join(
@@ -361,7 +365,7 @@ def register(app):
             hold_data.append([
                 row['ticker'],
                 sector,
-                str(int(row['quantity'])),
+                f"{row['quantity']:,.6f}".rstrip('0').rstrip('.'),
                 f"{ccy_symbol(row.get('currency') or '') if values_base else ''}{row['avg_cost']:,.2f}",
                 (f"{ccy_symbol(row.get('currency') or '')}{row['fx_native_price']:,.2f}"
                  if pd.notna(row.get('fx_native_price')) else f"~{row['current_price']:,.2f}"),

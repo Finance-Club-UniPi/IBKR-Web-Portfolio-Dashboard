@@ -252,8 +252,8 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
     )
 
     notes = [f"{frame.index[0]:%d %b %Y} → {frame.index[-1]:%d %b %Y}. Your current holdings are "
-             f"valued at historical closes in {base} (daily FX); cash, past trades and dividends "
-             "are not included."]
+             f"valued at historical closes in {base} (daily FX); cash and past trades are not included. Prices are dividend-adjusted; "
+             "the values are a total-return backcast, not historical account balances."]
     if mode == 'abs' and found:
         notes.append("Comparison instruments show the same starting capital invested in them, "
                      "in their own trading currency.")
@@ -323,8 +323,9 @@ def register(app):
         Input('perf-compare', 'value'),
         Input('perf-range', 'start_date'),
         Input('perf-range', 'end_date'),
+        Input('refresh-interval', 'n_intervals'),
     )
-    def render_performance(holdings, period, mode, compare_text, start, end):
+    def render_performance(holdings, period, mode, compare_text, start, end, _interval):
         try:
             return build_performance(holdings, period or DEFAULT_PERIOD, mode or 'pct',
                                      compare_text, start, end)

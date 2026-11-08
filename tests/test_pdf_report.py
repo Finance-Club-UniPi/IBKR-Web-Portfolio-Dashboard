@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import pdf_report as pr
+from exposure import sector_geo_breakdown
 
 
 def series(values, end='2026-10-23'):
@@ -15,22 +16,22 @@ def series(values, end='2026-10-23'):
 
 def test_sector_geo_splits_etf_and_ranks_by_weight():
     positions = [
-        {'ticker': 'AAA', 'market_value': 60},
-        {'ticker': 'ETF', 'market_value': 40},
+        {'ticker': 'AAA', 'allocation_pct': 60, 'base_market_value': 60},
+        {'ticker': 'ETF', 'allocation_pct': 40, 'base_market_value': 40},
     ]
     sector_geo = {
         'AAA': {'sector': 'Technology', 'country': 'United States'},
         'ETF': {'sector': 'Unknown', 'country': 'Ireland', 'is_etf': True,
                 'sector_weights': {'Technology': 0.5, 'Energy': 0.5}},
     }
-    sectors, countries = pr.sector_geo_breakdown(positions, sector_geo)
+    sectors, countries = sector_geo_breakdown(positions, sector_geo)
     assert [(s[0], round(s[1], 1)) for s in sectors] == [('Technology', 80.0), ('Energy', 20.0)]
     assert sectors[0][2] == ['AAA', 'ETF']
     assert [(c[0], round(c[1], 1)) for c in countries] == [('United States', 60.0), ('Ireland', 40.0)]
 
 
 def test_sector_geo_unknown_ticker_is_not_dropped():
-    sectors, countries = pr.sector_geo_breakdown([{'ticker': 'ZZZ', 'market_value': 10}], {})
+    sectors, countries = sector_geo_breakdown([{'ticker': 'ZZZ', 'allocation_pct': 100, 'base_market_value': 10}], {})
     assert sectors == [('Unknown', 100.0, ['ZZZ'])]
     assert countries == [('Unknown', 100.0)]
 

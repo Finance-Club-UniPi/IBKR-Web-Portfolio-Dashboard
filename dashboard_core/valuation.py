@@ -226,11 +226,10 @@ def _render_market_valuation_inner(data):
             ], style={'marginTop': '8px'}),
         ])
         b_explainer = (
-            f'Compares the total value of all US stocks to GDP. '
+            f'Compares annual US listed-domestic-company market capitalization to same-year GDP. '
             f'Above 100% means the market is worth more than the entire US economy produces in a year. '
-            f'The modern average since 2000 is ~127%. '
-            f'GDP data as of {buffett_d["gdp_quarter"]} ({buffett_d["gdp_source"]}) '
-            f'— a 1–2 quarter lag is normal. '
+            f'Annual market cap and GDP as of {buffett_d["gdp_quarter"]} ({buffett_d["gdp_source"]}) '
+            f'— annual reporting can lag by years; this is not a live estimate. '
             f'Warren Buffett called it \'the best single measure of where valuations stand at any given moment.\''
         )
     else:

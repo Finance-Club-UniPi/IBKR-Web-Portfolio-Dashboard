@@ -5,8 +5,8 @@ and shares the `ctx`/`datetime` plumbing.
 
 Market Intelligence:
     - populate_market_intel: fan-out yfinance fetch (sector_geo + earnings)
-      into the market-intel-data store, with a ticker-set guard that returns
-      no_update when the holdings haven't changed.
+      into each browser's market-intel-data store; the shared timed cache
+      limits upstream requests.
     - render_sector_geo:     sector donut + country chart + per-sector ticker
       legend table.
     - render_earnings:       upcoming earnings calendar table.
@@ -19,10 +19,11 @@ import time
 from datetime import date, datetime
 
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, dcc, html, no_update
+from dash import Input, Output, ctx, dcc, html, no_update
 
-from dashboard_core.helpers import EURUSD_FALLBACK, ccy_symbol, section_label, to_base
+from dashboard_core.helpers import ccy_symbol, section_label
 from decorators import NotReadyError, safe_render
+from exposure import sector_geo_breakdown
 from market_intel import get_earnings_data, get_sector_geo
 from net_util import run_parallel
 from styles import (
@@ -46,9 +47,6 @@ from styles import (
 
 log = logging.getLogger(__name__)
 
-# Module-level cache key; only updated AFTER a successful fetch so that a
-# failed fetch is retried on the next 60-second refresh.
-_last_intel_tickers: tuple | None = None
 
 
 
@@ -97,16 +95,10 @@ def register(app):
         Input('portfolio-data', 'data'),
     )
     def populate_market_intel(data):
-        global _last_intel_tickers
         if not data or 'positions' not in data:
-            _last_intel_tickers = None
             return None
 
         tickers    = [p['ticker'] for p in data['positions']]
-        ticker_key = tuple(sorted(tickers))
-
-        if ticker_key == _last_intel_tickers:
-            return no_update
 
         parallel = run_parallel({
             'sector_geo': lambda: get_sector_geo(tickers),
@@ -118,7 +110,6 @@ def register(app):
             'earnings':   parallel.get('earnings')   or {},
         }
 
-        _last_intel_tickers = ticker_key
         return result
 
     # ── 1. Sector & Geography ────────────────────────────────────────────────
@@ -126,7 +117,7 @@ def register(app):
         Output('sector-geo-section', 'children'),
         Input('market-intel-data', 'data'),
         Input('connection-status', 'data'),
-        State('portfolio-data', 'data'),
+        Input('portfolio-data', 'data'),
     )
     @safe_render('Sector & Geography')
     def render_sector_geo(intel, status, port_data):
@@ -137,7 +128,7 @@ def register(app):
         Output('earnings-section', 'children'),
         Input('market-intel-data', 'data'),
         Input('connection-status', 'data'),
-        State('portfolio-data', 'data'),
+        Input('portfolio-data', 'data'),
     )
     @safe_render('Earnings')
     def render_earnings(intel, status, port_data):
@@ -156,38 +147,13 @@ def _render_sector_geo_inner(intel, port_data, status=''):
     sg = intel.get('sector_geo', {})
     positions = port_data['positions']
 
-    sector_val:     dict = {}
-    country_val:    dict = {}
-    sector_tickers: dict = {}
-
-    for p in positions:
-        sym  = p['ticker']
-        val  = p['market_value']
-        info = sg.get(sym, {})
-        cty  = info.get('country', 'Unknown')
-        country_val[cty] = country_val.get(cty, 0) + val
-
-        weights = info.get('sector_weights') or {}
-        if info.get('is_etf') and weights:
-            wsum = sum(weights.values()) or 1.0
-            for sec, w in weights.items():
-                share = val * (w / wsum)
-                sector_val[sec] = sector_val.get(sec, 0) + share
-                sector_tickers.setdefault(sec, []).append(sym)
-        else:
-            sec = info.get('sector', 'Unknown')
-            sector_val[sec]  = sector_val.get(sec, 0) + val
-            sector_tickers.setdefault(sec, []).append(sym)
-
-    # De-duplicate ticker lists
-    for sec, tks in sector_tickers.items():
-        seen: list = []
-        for t in tks:
-            if t not in seen:
-                seen.append(t)
-        sector_tickers[sec] = seen
-
-    total = sum(sector_val.values()) or 1
+    sectors, countries = sector_geo_breakdown(positions, sg)
+    if not sectors:
+        return html.Div('Exposure unavailable: verified base-currency values for long holdings are required.', style=CARD)
+    sector_val = {name: pct for name, pct, _ in sectors}
+    sector_tickers = {name: tickers for name, _, tickers in sectors}
+    country_val = dict(countries)
+    total = 100.0
 
     # ── Sector donut ────────────────────────────────────────────────────────
     MIN_SECTOR_PCT = 5.0
@@ -203,11 +169,9 @@ def _render_sector_geo_inner(intel, port_data, status=''):
     color_by_sec = dict(zip(sec_labels, sec_colors, strict=True))
 
     acct          = port_data.get('account') or {}
-    rate          = acct.get('eurusd_rate') or EURUSD_FALLBACK
     base_ccy      = acct.get('base_currency', 'EUR')
     sym           = ccy_symbol(base_ccy)
-    total_val_raw = (port_data.get('summary') or {}).get('total_value') or total
-    total_base    = to_base(total_val_raw, rate, base_ccy)
+    total_base = sum(p['base_market_value'] for p in positions)
     if total_base >= 1_000_000:
         center_val = f"{sym}{total_base/1_000_000:.2f}M"
     elif total_base >= 1_000:
@@ -215,7 +179,7 @@ def _render_sector_geo_inner(intel, port_data, status=''):
     else:
         center_val = f"{sym}{total_base:,.0f}"
 
-    sec_values_base = [to_base(v, rate, base_ccy) for v in sec_values]
+    sec_values_base = [v / 100 * total_base for v in sec_values]
     donut = go.Figure(go.Pie(
         labels=sec_labels, values=sec_values, hole=0.62,
         textposition='none', sort=False,

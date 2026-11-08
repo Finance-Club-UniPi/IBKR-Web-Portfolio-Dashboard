@@ -80,145 +80,35 @@ def treasury_zone(v: float) -> tuple[str, str]:
 
 # ── Buffett Indicator ──────────────────────────────────────────────────────────
 
-def _fred_date_to_quarter(date_str: str) -> str:
-    """Convert a FRED quarterly date string to a readable quarter label.
-    '2025-10-01' -> 'Q4 2025',  '2025-07-01' -> 'Q3 2025', etc.
-    """
-    try:
-        month = int(date_str[5:7])
-        year  = date_str[:4]
-        return f'Q{(month - 1) // 3 + 1} {year}'
-    except Exception:
-        return date_str[:7]
-
-
 def get_buffett_indicator() -> dict | None:
+    """Annual US listed-domestic market cap / GDP, both in current USD.
+
+    World Bank CM.MKT.LCAP.CD and NY.GDP.MKTP.CD are matched by year.
+    This is a dated annual observation, not a live Wilshire-index estimate.
     """
-    Total US equity market cap (Wilshire 5000 index ≈ market cap in $B)
-    divided by US nominal GDP × 100.
-
-    GDP source: FRED (St. Louis Fed) quarterly series — updated within weeks
-    of each BEA release, far more current than World Bank annual data.
-    Fallback: World Bank annual data (1-2 years stale but always available).
-
-    Returns
-    -------
-    {value, market_cap_t, gdp_t, gdp_quarter, gdp_source}  or None on failure.
-    """
-    _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-
     def fetch():
-        import io
-
-        import yfinance as yf
-
-        # Wilshire 5000 Full Cap index — index level ≈ US total equity market
-        # cap in billions of USD (Wilshire Associates convention).
-        hist = yf.Ticker('^W5000').history(period='5d')
-        if hist.empty:
-            raise RuntimeError('Empty Wilshire 5000 history')
-        market_cap_b = float(hist['Close'].dropna().iloc[-1])
-
-        import datetime
-        gdp_b, gdp_quarter, gdp_source = None, None, None
-        now          = datetime.datetime.now()
-        current_year = now.year
-        current_q    = (now.month - 1) // 3 + 1
-
-        def _quarters_since(data_year: int, data_q: int) -> int:
-            return (current_year - data_year) * 4 + (current_q - data_q)
-
-        def _forward_extrapolate(gdp_val: float, data_year: int, data_q: int,
-                                 quarterly_rate: float = 0.0068) -> tuple:
-            """Project gdp_val forward to the current quarter.
-            quarterly_rate=0.0068 ≈ 2.8% annualised nominal growth.
-            Returns (projected_gdp, label).  Label is '(est.)' when projected.
-            """
-            n = _quarters_since(data_year, data_q)
-            if n <= 0:
-                return gdp_val, f'Q{data_q} {data_year}'
-            projected = gdp_val * (1 + quarterly_rate) ** n
-            return projected, f'Q{current_q} {current_year} (est.)'
-
-        # ── Primary: FRED GDP series (two URL formats) ────────────────────────
-        for fred_url in [
-            'https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDP',
-            'https://fred.stlouisfed.org/data/GDP.txt',
-        ]:
-            try:
-                req = urllib.request.Request(fred_url, headers={'User-Agent': _UA})
-                # Short timeout — FRED occasionally stalls and we'd rather fall
-                # back to World Bank than block the Market Valuation panel.
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    raw = resp.read().decode('utf-8')
-                if raw.lstrip().startswith('<'):
-                    raise ValueError('FRED returned HTML')
-                df = pd.read_csv(io.StringIO(raw), names=['date', 'gdp'], skiprows=1)
-                df = df[df['gdp'] != '.'].copy()
-                df['gdp'] = pd.to_numeric(df['gdp'], errors='coerce')
-                df = df.dropna(subset=['gdp'])
-                if df.empty:
-                    raise ValueError('No numeric rows in FRED response')
-                latest_date = str(df.iloc[-1]['date'])   # e.g. "2025-10-01"
-                raw_gdp     = float(df.iloc[-1]['gdp'])
-                data_year   = int(latest_date[:4])
-                data_q      = (int(latest_date[5:7]) - 1) // 3 + 1
-                # Use actual trailing growth rate from FRED data if available
-                if len(df) >= 4:
-                    quarterly_rate = (raw_gdp / float(df.iloc[-4]['gdp'])) ** 0.25 - 1
-                else:
-                    quarterly_rate = 0.0068
-                gdp_b, gdp_quarter = _forward_extrapolate(
-                    raw_gdp, data_year, data_q, quarterly_rate)
-                gdp_source = 'FRED'
-                log.debug('Buffett GDP from FRED: raw %s $%.1fT → %s $%.1fT',
-                          _fred_date_to_quarter(latest_date), raw_gdp / 1000,
-                          gdp_quarter, gdp_b / 1000)
-                break
-            except Exception as e:
-                log.warning('FRED GDP attempt failed (%s): %s', fred_url, e)
-
-        # ── Fallback: World Bank annual nominal GDP (current USD) ─────────────
-        if gdp_b is None:
-            try:
-                url = (
-                    'https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.CD'
-                    '?format=json&mrv=3&per_page=3'
-                )
-                req = urllib.request.Request(url, headers={'User-Agent': _UA})
-                with urllib.request.urlopen(req, timeout=6) as resp:
-                    data = json.loads(resp.read())
-                for record in (data[1] or []):
-                    if record.get('value') is not None:
-                        raw_gdp   = float(record['value']) / 1e9
-                        data_year = int(record.get('date', current_year))
-                        # World Bank gives annual data; treat as Q4 of that year
-                        gdp_b, gdp_quarter = _forward_extrapolate(
-                            raw_gdp, data_year, 4)
-                        gdp_source = 'World Bank'
-                        log.debug('Buffett GDP from World Bank: %d $%.1fT → %s $%.1fT',
-                                  data_year, raw_gdp / 1000, gdp_quarter, gdp_b / 1000)
-                        break
-            except Exception as e:
-                log.warning('World Bank GDP fetch also failed: %s', e)
-
-        if gdp_b is None:
-            raise RuntimeError('Could not fetch GDP from FRED or World Bank')
-
-        ratio = (market_cap_b / gdp_b) * 100
-
-        return {
-            'value':        round(ratio, 1),
-            'market_cap_t': round(market_cap_b / 1_000, 1),
-            'gdp_t':        round(gdp_b        / 1_000, 1),
-            'gdp_quarter':  gdp_quarter,
-            'gdp_source':   gdp_source,
-        }
-
+        observations = []
+        for indicator in ('CM.MKT.LCAP.CD', 'NY.GDP.MKTP.CD'):
+            url = (f'https://api.worldbank.org/v2/country/US/indicator/{indicator}'
+                   '?format=json&per_page=20&mrv=20')
+            request = urllib.request.Request(url, headers={'User-Agent': 'IBKRDashboard/1.0'})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                records = json.loads(response.read())[1] or []
+            observations.append({row['date']: float(row['value']) for row in records
+                                 if row.get('value') is not None and float(row['value']) > 0})
+        market_caps, gdps = observations
+        years = market_caps.keys() & gdps.keys()
+        if not years:
+            raise ValueError('No common year for market capitalization and GDP')
+        year = max(years)
+        return {'value': round(market_caps[year] / gdps[year] * 100, 1),
+                'market_cap_t': round(market_caps[year] / 1e12, 1),
+                'gdp_t': round(gdps[year] / 1e12, 1),
+                'gdp_quarter': year, 'gdp_source': 'World Bank, annual; listed domestic companies'}
     try:
-        return cached_fetch('buffett', _TTL, fetch)
-    except Exception as e:
-        log.warning('Buffett indicator fetch failed: %s', e)
+        return cached_fetch('buffett_annual_usd_v1', _TTL, fetch)
+    except Exception as error:
+        log.warning('Buffett indicator unavailable: %s', error)
         return None
 
 

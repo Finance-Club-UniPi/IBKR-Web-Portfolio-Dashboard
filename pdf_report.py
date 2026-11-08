@@ -36,44 +36,6 @@ def short_sector(name: str | None) -> str:
 
 # ── Sector & geography ───────────────────────────────────────────────────────
 
-def sector_geo_breakdown(positions: list[dict], sector_geo: dict):
-    """([(sector, pct, [tickers])], [(country, pct)]), each sorted by weight.
-
-    Mirrors the dashboard charts: an ETF with known sector weights is spread
-    across those sectors; any other position counts fully toward its own sector.
-    Countries use the instrument's domicile.
-    """
-    sector_val: dict[str, float] = {}
-    sector_tickers: dict[str, list[str]] = {}
-    country_val: dict[str, float] = {}
-
-    for p in positions:
-        val = p.get('market_value') or 0
-        info = sector_geo.get(p['ticker']) or {}
-        country = info.get('country') or 'Unknown'
-        country_val[country] = country_val.get(country, 0) + val
-
-        weights = info.get('sector_weights') or {}
-        if info.get('is_etf') and weights:
-            wsum = sum(weights.values()) or 1.0
-            shares = {sec: val * (w / wsum) for sec, w in weights.items()}
-        else:
-            shares = {info.get('sector') or 'Unknown': val}
-        for sec, share in shares.items():
-            sector_val[sec] = sector_val.get(sec, 0) + share
-            if p['ticker'] not in sector_tickers.setdefault(sec, []):
-                sector_tickers[sec].append(p['ticker'])
-
-    def ranked(values: dict[str, float]):
-        total = sum(values.values()) or 1.0
-        return sorted(((k, v / total * 100) for k, v in values.items()),
-                      key=lambda kv: kv[1], reverse=True)
-
-    sectors = [(name, pct, sorted(sector_tickers.get(name, [])))
-               for name, pct in ranked(sector_val)]
-    return sectors, ranked(country_val)
-
-
 # ── Performance versus the S&P 500 ───────────────────────────────────────────
 
 def _value_at(series: pd.Series, when: pd.Timestamp) -> float | None:
@@ -128,7 +90,7 @@ def fetch_performance(positions: list[dict], base_ccy: str):
     """(portfolio value series, S&P 500 series | None, [(ticker, reason left out)]), or None.
 
     The portfolio series is the dashboard's backcast (today's holdings valued at
-    historical closes), so it is a like-for-like comparison, not an account ledger.
+    dividend-adjusted historical closes), so it is a like-for-like comparison, not an account ledger.
     """
     slim = [{'ticker': p.get('ticker'), 'quantity': p.get('quantity'),
              'currency': p.get('currency') or '', 'multiplier': p.get('multiplier')}

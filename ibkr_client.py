@@ -515,13 +515,13 @@ class _IBKRConnection:
                     await asyncio.sleep(0.05)
                     if pnl_obj.dailyPnL == pnl_obj.dailyPnL:  # not NaN
                         break
-                result = round(pnl_obj.dailyPnL, 2) if pnl_obj.dailyPnL == pnl_obj.dailyPnL else 0.0
+                result = round(pnl_obj.dailyPnL, 2) if pnl_obj.dailyPnL == pnl_obj.dailyPnL else None
                 ib.cancelPnL(acct_name)
-                log.debug("Daily P&L: %.2f", result)
+                log.debug("Daily P&L: %s", result)
                 return result
             except Exception as e:
                 log.warning("Daily P&L fetch failed: %s", e)
-                return 0.0
+                return None
 
         # Chain F: per-position P&L. Unlike PortfolioItem, reqPnLSingle reports
         # value and unrealized P&L in the account base currency, which embeds
