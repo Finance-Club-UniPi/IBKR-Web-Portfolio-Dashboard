@@ -18,6 +18,7 @@ from ui.components.position import (
     _stat,
 )
 from ui.errors import safe_render
+from ui.helpers import ccy_symbol
 from ui.styles import (
     CARD,
     COLOR_BAD,
@@ -86,7 +87,7 @@ def register(app):
             return None, None, [], 'grid'
         if not active_cell or not table_data:
             return no_update, no_update, no_update, no_update
-        ticker = table_data[active_cell['row']]['ticker']
+        ticker = table_data[active_cell['row']].get('position_id') or table_data[active_cell['row']]['ticker']
         if current == ticker:
             return None, None, [], 'grid'
         return ticker, no_update, no_update, 'grid'
@@ -107,7 +108,7 @@ def register(app):
         Input('selected-ticker', 'data'),
         Input('selected-period', 'data'),
         Input('uploaded-trades', 'data'),
-        State('portfolio-data', 'data'),
+        Input('portfolio-data', 'data'),
         State('fund-view-mode', 'data'),
     )
     @safe_render('Position Detail')
@@ -116,10 +117,13 @@ def register(app):
         if not ticker or not data or 'positions' not in data:
             return None
         df = pd.DataFrame(data['positions'])
-        matches = df[df['ticker'] == ticker]
+        matches = df[(df['position_id'] if 'position_id' in df else df['ticker']) == ticker]
         if matches.empty:
             return None
         r = matches.iloc[0]
+        ticker = r['ticker']
+        native_sym = ccy_symbol(r.get('currency') or 'USD')
+        base_sym = ccy_symbol((data.get('account') or {}).get('base_currency', 'EUR'))
 
         price        = r['current_price']
         daily_chg    = r.get('daily_change')
@@ -128,27 +132,27 @@ def register(app):
         # Daily change header
         if daily_chg is not None and daily_chg == daily_chg:
             chg_color = COLOR_GOOD if daily_chg >= 0 else COLOR_BAD
-            chg_str   = f"{'▲' if daily_chg >= 0 else '▼'} ${abs(daily_chg):,.2f}  ({daily_chg_pct:+.2f}%)"
+            chg_str   = f"{'▲' if daily_chg >= 0 else '▼'} {native_sym}{abs(daily_chg):,.2f}  ({daily_chg_pct:+.2f}%)"
         else:
             chg_color, chg_str = COLOR_TEXT_MID, '—'
 
         qty       = r.get('quantity') or 0
-        mkt_val   = r.get('market_value')
+        mkt_val   = r.get('base_market_value')
         unreal    = r.get('unrealized_pnl')
         avg_cost  = r.get('avg_cost')
 
         if avg_cost and avg_cost == avg_cost and avg_cost > 0:
-            cost_diff_pct = (price - avg_cost) / avg_cost * 100
+            cost_diff_pct = (price - avg_cost) / avg_cost * 100 * (-1 if qty < 0 else 1)
             cost_color = COLOR_GOOD if cost_diff_pct >= 0 else COLOR_BAD
-            cost_str   = f"${avg_cost:,.2f}  ({cost_diff_pct:+.2f}%)"
+            cost_str   = f"{native_sym}{avg_cost:,.2f}  ({cost_diff_pct:+.2f}%)"
         else:
             cost_color, cost_str = COLOR_TEXT_MID, '—'
 
-        qty_str    = f"{qty:,.0f}" if qty else '—'
-        mkt_str    = f"${mkt_val:,.2f}" if mkt_val is not None else '—'
+        qty_str    = f"{qty:,}" if qty else '—'
+        mkt_str    = f"{base_sym}{mkt_val:,.2f}" if mkt_val is not None else '—'
         if unreal is not None:
             unreal_color = COLOR_GOOD if unreal >= 0 else COLOR_BAD
-            unreal_str   = f"${unreal:+,.2f}"
+            unreal_str   = f"{native_sym}{unreal:+,.2f}"
         else:
             unreal_color, unreal_str = COLOR_TEXT_MID, '—'
 
@@ -177,7 +181,9 @@ def register(app):
         # Collect trades for this ticker from live fills + uploaded CSV history.
         live_trades = (data.get('trades') or []) if isinstance(data, dict) else []
         all_trades  = list(uploaded or []) + list(live_trades)
-        ticker_trades = [t for t in all_trades if (t.get('ticker') or '') == ticker]
+        ticker_trades = [t for t in all_trades if (
+            (t.get('conId') == r.get('conId') and (not t.get('account') or t['account'] == r.get('account')))
+            if t.get('conId') else (t.get('ticker') == ticker and len(df[df['ticker'] == ticker]) == 1))]
 
         # Price history chart with period toggle + CSV upload button
         sel_period = period if period in _PERIOD_CHOICES else '1M'
@@ -237,7 +243,7 @@ def register(app):
                          style={'display': 'flex', 'gap': '4px'}),
             ], style={'display': 'flex', 'justifyContent': 'space-between',
                       'alignItems': 'center', 'marginBottom': '6px'}),
-            _build_price_sparkline(ticker, sel_period, avg_cost, ticker_trades),
+            _build_price_sparkline(ticker, sel_period, avg_cost, ticker_trades, position=r.to_dict()),
             html.Div([
                 html.Span(trade_count_note, style={'fontSize': '13px', 'color': COLOR_TEXT_MID, 'fontWeight': '500'}),
                 html.Div(id={'type': 'position-upload-status', 'index': 0},
@@ -252,7 +258,7 @@ def register(app):
             html.Div([
                 html.Div([
                     html.Span(ticker, style={'fontWeight': '700', 'fontSize': '17px', 'color': COLOR_TEXT_STRONG}),
-                    html.Span(f"${price:,.2f}",
+                    html.Span(f"{native_sym}{price:,.2f}",
                               style={'fontSize': '17px', 'color': COLOR_TEXT_STRONG, 'marginLeft': '12px'}),
                     html.Span(chg_str,
                               style={'fontSize': '15px', 'color': chg_color, 'marginLeft': '12px'}),
@@ -335,7 +341,10 @@ def register(app):
         if not parsed:
             return no_update, _broadcast("No trades found in CSV", COLOR_WARN, contents_list)
 
-        merged = save_uploaded_trades(parsed)
+        try:
+            merged = save_uploaded_trades(parsed)
+        except (ValueError, OSError) as e:
+            return no_update, _broadcast(str(e), COLOR_BAD, contents_list)
         return merged, _broadcast(f"{len(parsed)} parsed · {len(merged)} total stored", COLOR_GOOD, contents_list)
 
     @app.callback(

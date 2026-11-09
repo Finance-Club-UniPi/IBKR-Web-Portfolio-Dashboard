@@ -131,6 +131,7 @@ def register(app):
         Input('startup-interval', 'n_intervals'),  # fires once at 2 s to catch post-restart timing
         Input('kb-refresh-btn', 'n_clicks'),       # triggered when user presses R
         Input('uploaded-trades', 'data'),          # new/cleared trade CSV -> recompute FX total
+        Input('fast-connect-poll', 'n_intervals'),  # collect completed background results
     )
     def fetch_data(*_):
         global _EVER_CONNECTED

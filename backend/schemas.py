@@ -11,6 +11,15 @@ from typing import NotRequired, TypedDict
 
 
 class PositionData(TypedDict):
+    account: NotRequired[str]
+    position_id: NotRequired[str]
+    primary_exchange: NotRequired[str]
+    signed_exposure_pct: NotRequired[float | None]
+    valuation_price: NotRequired[float]
+    valuation_rate: NotRequired[float]
+    valuation_as_of: NotRequired[str]
+    valuation_source: NotRequired[str]
+    valuation_reason: NotRequired[str]
     conId: NotRequired[int]
     ticker: str
     quantity: float
@@ -66,6 +75,11 @@ class SummaryData(TypedDict):
 
 
 class AccountData(TypedDict, total=False):
+    account_id: str
+    account_ready: bool
+    as_of: str
+    cash_balances: dict[str, float]
+    valuation_rates: dict[str, dict]
     base_currency: str
     portfolio_value_units: str
     cash_base: float
@@ -92,6 +106,8 @@ class PortfolioData(TypedDict):
     account: AccountData
     trades: NotRequired[list[dict]]
     div_data: NotRequired[dict]
+    history_status: NotRequired[str]
+    analysis: NotRequired[dict]
 
 
 class SectorGeoEntry(TypedDict, total=False):

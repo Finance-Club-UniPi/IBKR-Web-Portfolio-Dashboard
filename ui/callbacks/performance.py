@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, html, no_update
 
 from backend.network import fetch_parallel, run_parallel
+from backend.portfolio.analysis import account_history
 from backend.portfolio.history import (
     CUSTOM,
     DEFAULT_PERIOD,
@@ -71,12 +72,13 @@ def _holdings_payload(data):
     if not data or not data.get('positions'):
         return None
     positions = [
-        {'ticker': p['ticker'], 'quantity': p.get('quantity'),
-         'currency': p.get('currency') or '', 'multiplier': p.get('multiplier')}
+        {k: p.get(k) for k in ('ticker', 'quantity', 'currency', 'multiplier', 'conId', 'account',
+                              'base_market_value', 'primary_exchange', 'valuation_as_of')}
         for p in data['positions']
     ]
     positions.sort(key=lambda p: p['ticker'])
-    return {'base': (data.get('account') or {}).get('base_currency', 'EUR'), 'positions': positions}
+    return {'base': (data.get('account') or {}).get('base_currency', 'EUR'), 'positions': positions,
+            'account': data.get('account') or {}}
 
 
 def _empty_figure(message: str) -> go.Figure:
@@ -116,6 +118,9 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
     if not holdings:
         return _empty_figure("Waiting for portfolio data…"), [], ""
 
+    if 'account' in holdings and not (holdings['account'].get('net_liquidation') or 0) > 0:
+        return _empty_figure('Positive account equity is required.'), [], 'Account equity unavailable'
+
     if period == CUSTOM:
         earliest, latest = custom_bounds()
         start, end = _as_date(start), _as_date(end) or latest
@@ -133,7 +138,9 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
 
     window = (start, end) if period == CUSTOM else ()   # presets keep the plain (period) calls
     results = run_parallel({
-        'portfolio': lambda: get_portfolio_history(holdings['positions'], base, period, *window),
+        'portfolio': lambda: ((account_history(holdings, period, *window)[0], [])
+                             if holdings.get('account', {}).get('net_liquidation') else
+                             get_portfolio_history(holdings['positions'], base, period, *window)),
         'compare':   lambda: fetch_parallel(symbols,
                                             lambda s: get_compare_history(s, period, *window)),
     })
@@ -182,6 +189,10 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
     notes = [f"{frame.index[0]:%d %b %Y} → {frame.index[-1]:%d %b %Y}. Your current holdings are "
              f"valued at historical closes in {base} (daily FX); cash and past trades are not included. Prices are dividend-adjusted; "
              "the values are a total-return backcast, not historical account balances."]
+    if holdings.get('account', {}).get('net_liquidation'):
+        notes = [f"{frame.index[0]:%d %b %Y} → {frame.index[-1]:%d %b %Y}. Account-equity scenarios "
+                 "at fixed current signed exposures, including cash FX. Dividend-adjusted prices; "
+                 "not actual historical account balances. Financing, borrow fees and trading costs excluded."]
     if mode == 'abs' and found:
         notes.append("Comparison instruments show the same starting capital invested in them, "
                      "in their own trading currency.")

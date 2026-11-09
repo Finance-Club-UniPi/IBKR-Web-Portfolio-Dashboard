@@ -95,6 +95,7 @@ def test_parse_symbols():
 
 def test_demo_holdings_build_the_performance_figure(monkeypatch):
     import ui.callbacks.performance as perf
+    monkeypatch.setattr(perf, 'account_history', lambda holdings, *args: (*ph.get_portfolio_history(holdings['positions'], holdings['base'], '1Y')[:1], None, []))
     raw = build_demo_payload('balanced')
     df = process_positions(raw['positions'], raw['market_data'], base_currency='EUR',
                            daily_fx_rates=raw['daily_fx_rates'])

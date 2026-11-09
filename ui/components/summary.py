@@ -11,6 +11,7 @@ import pandas as pd
 import plotly.express as px
 from dash import dash_table, dcc, html
 
+from backend.portfolio.analysis import fingerprint
 from backend.portfolio.positions import daily_pnl as select_daily_pnl
 from backend.schemas import PortfolioData
 from ui.errors import NotReadyError
@@ -39,7 +40,7 @@ from ui.styles import (
 )
 
 
-def build_summary_cards(data: PortfolioData | None, status):
+def build_summary_cards(data: PortfolioData | None, status, analysis=None):
     if not data or 'summary' not in data:
         if status == 'disconnected':
             return []
@@ -125,19 +126,24 @@ def build_summary_cards(data: PortfolioData | None, status):
     prev_nlv  = net_liq - daily_pnl if net_liq and daily_pnl is not None else None
     daily_pct = round(daily_pnl / prev_nlv * 100, 2) if prev_nlv and prev_nlv > 0 else None
 
-    gross_base   = a.get('gross_position_value') or 0
+    values = [p.get('base_market_value') for p in data.get('positions', [])]
+    net_positions = sum(values) if values and all(v is not None for v in values) else None
     realized_pnl = s.get('total_realized_pnl') or 0
     fx_total     = s.get('total_fx_today')
     fx_n         = s.get('fx_covered', 0)
     fx_all       = s.get('total_fx_total')
     fx_all_n     = s.get('fx_total_covered', 0)
     n_positions  = len(data.get('positions', []))
-    beta         = s.get('portfolio_beta')
-    beta_cov     = s.get('beta_coverage_pct', 0)
+    if analysis and analysis.get('input_key') and analysis['input_key'] != fingerprint(data, analysis['period']):
+        analysis = {'reason': 'Historical analysis loading for current positions'}
+    beta         = (analysis or {}).get('beta')
+    beta_note = ((analysis or {}).get('reason') or f"{(analysis or {}).get('period', '1Y')} · account equity")
+    if (analysis or {}).get('valuation_as_of'):
+        beta_note += f" · valued {analysis['valuation_as_of'][:16].replace('T', ' ')}"
 
     return [
         card("Net Liquidation", net_liq,
-             note=f"{sym}{gross_base:,.0f} positions + cash",
+             note=f"{sym}{net_positions:,.0f} net positions + cash/accruals" if net_positions is not None else "IBKR account equity",
              title="IBKR's account total in base currency: positions at market value + cash + "
                    "accrued interest/dividends. Matches the figure in TWS / the IBKR app.")
         if net_liq and net_liq > 0 else
@@ -158,20 +164,19 @@ def build_summary_cards(data: PortfolioData | None, status):
                    "portfolio and are not included."),
         card("FX total", fx_all, is_pnl=fx_all is not None,
              value_text='—' if fx_all is None else None,
-             note=f"{fx_all_n} of {n_positions} positions",
+             note=data.get('history_status') if not fx_all_n else f"{fx_all_n} of {n_positions} positions",
              title="Sum of the per-holding 'FX total' column: estimated effect of currency moves "
                    "since you bought, in account base currency, rebuilt from complete trade history "
                    "using daily purchase-date FX closes. The price/FX cross-term "
                    "is assigned to FX."),
-        card("FX today", fx_total, is_pnl=fx_total is not None,
+        card(s.get("fx_label", "FX today"), fx_total, is_pnl=fx_total is not None,
              value_text='—' if fx_total is None else None,
              note=f"{fx_n} of {n_positions} positions",
              title="Sum of the per-holding 'FX today' column: estimated effect of today's currency "
                    "move on current exposure, in account base currency. Not since-purchase."),
         card("Portfolio beta", beta, value_text='—' if beta is None else f"{beta:.2f}",
-             note=f"{beta_cov:.0f}% of value covered" if beta is not None else None,
-             title="Value-weighted beta vs the S&P 500 (Yahoo Finance) over holdings with a beta, "
-                   "excluding cash. Above 1 amplifies market moves; below 1 dampens them."),
+             note=beta_note,
+             title="Historical account-equity beta vs the S&P 500; the same period and calculation as the Risk page."),
     ]
 
 
@@ -202,15 +207,19 @@ def build_holdings_table(data, status):
                                 'marginTop': '-10px',
                             }) if any_stale else None
 
+    stamps = [p.get('valuation_as_of') for p in data['positions'] if p.get('valuation_as_of')]
+    if stamps:
+        stale_badge = html.Span('Valuations as of ' + min(stamps), className='badge-warn')
+
     # Pre-format display columns
     def _price_display(row):
-        quote = row.get('fx_native_price')
+        quote = row.get('valuation_price', row.get('fx_native_price'))
         if row.get('price_unit_verified') and pd.notna(quote):
             return f"{ccy_symbol(row.get('currency') or '')}{quote:,.2f}"
         return f"~{row['current_price']:,.2f}"
 
     df['price_display'] = df.apply(_price_display, axis=1)
-    df['weight_display']    = df['allocation_pct'].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else '—')
+    df['weight_display']    = df.get('signed_exposure_pct', df['allocation_pct']).apply(lambda v: f"{v:+.1f}%" if pd.notna(v) else '—')
     df['pnl_pct_display']   = df['pnl_pct'].apply(lambda v: f"{v:+.2f}%")
     for col in ('beta', 'fx_total'):
         if col not in df.columns:
@@ -221,9 +230,14 @@ def build_holdings_table(data, status):
         'market_value', 'pnl_pct', 'pnl_pct_display',
         'unrealized_pnl', 'fx_total', 'fx_today', 'beta', 'weight_display',
     ]].astype(object)
+    if 'position_id' in df:
+        table_frame['position_id'] = df['position_id']
+    if 'base_market_value' in df:
+        table_frame['base_market_value'] = df['base_market_value'].astype(object)
     table_data = table_frame.where(pd.notna(table_frame), None).to_dict('records')
 
     tooltip_data = [{
+        'price_display': {'value': row.get('valuation_reason') or 'Dated broker quote', 'type': 'text'},
         'fx_total': {
             'value': row.get('fx_total_reason') or (
                 'Rebuilt from your trade history: Σ lot qty × price × (FX now − FX at purchase), '
@@ -248,8 +262,8 @@ def build_holdings_table(data, status):
              'id': 'avg_cost', 'type': 'numeric',
              'format': {'specifier': ',.2f'}},
             {'name': 'Price',    'id': 'price_display',     'type': 'text'},
-            {'name': f'Value ({base_ccy})' if values_base else 'Value (TWS units)',
-             'id': 'market_value', 'type': 'numeric',
+            {'name': f'Value ({base_ccy})' if 'base_market_value' in df else 'Value (TWS units)',
+             'id': 'base_market_value' if 'base_market_value' in df else 'market_value', 'type': 'numeric',
              'format': {'specifier': ',.0f'}},
             {'name': 'P&L %',   'id': 'pnl_pct_display',    'type': 'text'},
             {'name': f'P&L ({base_ccy})' if values_base else 'P&L (TWS units)',
@@ -261,13 +275,13 @@ def build_holdings_table(data, status):
              'format': {'specifier': '+,.2f', 'nully': '—'}},
             {'name': 'Beta',    'id': 'beta', 'type': 'numeric',
              'format': {'specifier': '.2f', 'nully': '—'}},
-            {'name': 'Weight',  'id': 'weight_display',     'type': 'text'},
+            {'name': 'Exposure / equity',  'id': 'weight_display',     'type': 'text'},
         ],
         data=table_data,
         tooltip_header={'fx_total': (
             'Estimated effect of currency moves since purchase on this position, in account base '
-            'currency. Rebuilt from complete trade history using FIFO lots and Yahoo daily FX closes '
-            'on each purchase date. The price/FX cross-term is assigned to FX. This is approximate; '
+            'currency. Uses reconciled open lots and opening-trade FX, or purchase-day daily FX '
+            'closes as an estimate. The price/FX cross-term is assigned to FX. '
             '— means the lot history or required prices/rates are unavailable.'
         ), 'fx_today': (
             'Estimated effect of today’s FX move on the current position, in account base currency. '
@@ -279,13 +293,13 @@ def build_holdings_table(data, status):
             '1.0 moves with the market, above 1 amplifies it, below 1 dampens it. '
             '— means no beta is available for this ticker.'
         ), 'price_display': (
-            'Fresh contract quote in the instrument currency when available; '
-            '~ indicates the cached TWS portfolio price, whose units or freshness are unverified.'
+            'Native price in the instrument currency; see source and date in the row tooltip. '
+            '~ indicates an older snapshot; check the source and date in the row tooltip.'
         )},
         tooltip_data=tooltip_data,
         tooltip_duration=None,
         sort_action='native',
-        sort_by=[{'column_id': 'market_value', 'direction': 'desc'}],
+        sort_by=[{'column_id': 'base_market_value' if 'base_market_value' in df else 'market_value', 'direction': 'desc'}],
         page_size=50,
         style_as_list_view=True,
         style_table={'overflowX': 'auto'},
@@ -307,7 +321,7 @@ def build_holdings_table(data, status):
             [{'if': {'column_id': c}, 'textAlign': 'right'}
              for c in ['quantity', 'avg_cost', 'price_display', 'market_value',
                        'pnl_pct_display', 'unrealized_pnl', 'fx_total', 'fx_today', 'beta',
-                       'weight_display']]
+                       'base_market_value', 'weight_display']]
         ),
         style_data_conditional=[
             {'if': {'filter_query': '{pnl_pct} >= 0', 'column_id': 'pnl_pct_display'},
@@ -348,7 +362,7 @@ def build_allocation_chart(data):
         ])
     df = pd.DataFrame(data['positions'])
     if df['allocation_pct'].isna().any() or (df['allocation_pct'] < 0).any():
-        return html.P('Allocation unavailable: verified base-currency values for long holdings are required.')
+        return html.P('Gross allocation unavailable: current position valuation is missing.')
     colors = [COLOR_BRAND, COLOR_WARN_SOFT, '#a855f7', COLOR_GOOD_SOFT, COLOR_WARN_YELLOW, '#ec4899', '#14b8a6']
     fig = px.pie(df, values='allocation_pct', names='ticker', hole=0.68,
                  color_discrete_sequence=colors)

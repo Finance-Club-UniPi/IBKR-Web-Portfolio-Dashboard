@@ -3,14 +3,12 @@
 import json
 from types import SimpleNamespace
 
-import pandas as pd
 from dash.development.base_component import Component
 
 import backend.coaching.scenarios as coach
 import backend.providers.ai as ai_provider
 import backend.providers.valuation as market_valuation
 from backend.portfolio.exposure import sector_geo_breakdown
-from backend.portfolio.positions import portfolio_beta
 from ui.components.scenarios import render_scenario
 
 
@@ -61,11 +59,6 @@ def test_missing_weights_are_unavailable_in_coach_and_chart():
     assert sector_geo_breakdown(port['positions'], {}) == ([], [])
 
 
-def test_short_portfolio_beta_is_explicitly_unavailable():
-    frame = pd.DataFrame({'base_market_value': [100, -50], 'beta': [1, 2]})
-    assert portfolio_beta(frame) == (None, 0, 0)
-
-
 def test_broker_zero_pnl_wins_over_calculated_fallback(demo_df, demo_summary):
     from ui.callbacks.summary import register
 
@@ -76,8 +69,32 @@ def test_broker_zero_pnl_wins_over_calculated_fallback(demo_df, demo_summary):
     cards = app.functions['update_summary'](data, 'connected')
     card = next(c for c in cards if c.children[0].children == "Today's P&L")
     assert card.children[1].children == '€+0.00'
+    answer = coach.scenario_performance(data, None, None)
+    assert "Today's move: 0 EUR." in text(answer)
     data['account']['daily_pnl'] = None
     assert '+50.00' in text(app.functions['update_summary'](data, 'connected'))
+
+
+def test_missing_cost_return_does_not_break_coach_market_comparison():
+    answer = coach.scenario_vs_market({'positions': [], 'summary': {'total_pnl_pct': None}}, None, None)
+    assert 'unavailable' in text(answer)
+
+
+def test_details_use_contract_identity_fractional_quantity_and_currency(monkeypatch):
+    import ui.callbacks.detail as detail
+    monkeypatch.setattr(detail, 'get_etf_brief_data', lambda _: None)
+    monkeypatch.setattr(detail, 'get_stock_fundamentals', lambda _: None)
+    monkeypatch.setattr(detail, '_build_price_sparkline', lambda *args, **kwargs: None)
+    app = App()
+    detail.register(app)
+    position = dict(ticker='SAME', position_id='TEST:2', account='TEST', conId=2,
+                    quantity=.4, currency='EUR', current_price=150, avg_cost=100,
+                    base_market_value=60, unrealized_pnl=20)
+    other = {**position, 'position_id': 'TEST:1', 'conId': 1, 'current_price': 999}
+    result = text(app.functions['show_position_detail']('TEST:2', '1M', [],
+                  {'positions': [other, position], 'account': {'base_currency': 'EUR'}}, 'grid'))
+    assert '0.4' in result and '€150.00' in result and '€60.00' in result
+    assert '$' not in result and '999' not in result
 
 
 def test_selection_uses_sorted_viewport(monkeypatch):

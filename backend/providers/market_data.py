@@ -36,6 +36,25 @@ log = logging.getLogger(__name__)
 # European holding never silently breaks an entire section.
 
 _EU_SUFFIXES = ['.DE', '.L', '.PA', '.AS', '.MI', '.SW', '.BR', '.LS', '.MC']
+_EXCHANGE_SUFFIXES = {'AEB': '.AS', 'IBIS': '.DE', 'IBIS2': '.DE', 'LSE': '.L', 'LSEETF': '.L',
+                      'SBF': '.PA', 'BVME': '.MI', 'EBS': '.SW'}
+_POSITION_SYMBOLS = {}
+
+
+def _listing_symbol(position):
+    suffix = _EXCHANGE_SUFFIXES.get(position.get('primary_exchange'))
+    ticker = position['ticker']
+    return (ticker if ticker.endswith(suffix) else ticker + suffix) if suffix else None
+
+
+def set_position_symbols(positions):
+    """Give ticker-only metadata consumers unambiguous broker listing hints."""
+    global _POSITION_SYMBOLS
+    candidates = {}
+    for position in positions:
+        candidates.setdefault(position['ticker'], set()).add(_listing_symbol(position))
+    _POSITION_SYMBOLS = {ticker: next(iter(symbols)) for ticker, symbols in candidates.items()
+                         if len(symbols) == 1 and None not in symbols}
 
 # yfinance's ETF sector-weighting keys are lowercase with underscores
 # (e.g. 'consumer_cyclical').  Map them to the same Title-Case names
@@ -98,15 +117,17 @@ def _get_info(sym: str) -> dict:
     All callers go through here so that at most one .info network call is made
     per symbol per TTL window — no matter how many functions request the same ticker.
     """
-    key = ('info', sym)
+    key = ('info_v2', sym)
     def _fetch():
         import yfinance as yf
-        try:
-            info = yf.Ticker(sym).info or {}
-            return info if info.get('quoteType') else {}
-        except Exception:
-            return {}
-    return cached_fetch(key, _TTL, _fetch)
+        info = yf.Ticker(sym).info or {}
+        if not info.get('quoteType'):
+            raise LookupError('Yahoo metadata unavailable')
+        return info
+    try:
+        return cached_fetch(key, _TTL, _fetch)
+    except Exception:
+        return {}
 
 
 def _yf_info(sym: str) -> dict:
@@ -114,12 +135,17 @@ def _yf_info(sym: str) -> dict:
     Return yfinance .info dict for sym, trying EU exchange suffixes on failure.
     Each candidate symbol goes through _get_info so the result is cached.
     """
+    resolved = _POSITION_SYMBOLS.get(sym) or _YF_SYM_CACHE.get(sym)
+    if resolved:
+        return _get_info(resolved)
     info = _get_info(sym)
     if info.get('quoteType'):
+        _YF_SYM_CACHE[sym] = sym
         return info
     for suffix in _EU_SUFFIXES:
         info = _get_info(sym + suffix)
         if info.get('quoteType'):
+            _YF_SYM_CACHE[sym] = sym + suffix
             log.debug('[market_intel] %s resolved via %s%s', sym, sym, suffix)
             return info
     return {}
@@ -131,6 +157,8 @@ def _resolve_yf_sym(sym: str) -> str:
     Uses _YF_SYM_CACHE (session-level) so resolution only runs once per process.
     Internally delegates to _get_info so each candidate's .info is also cached.
     """
+    if sym in _POSITION_SYMBOLS:
+        return _POSITION_SYMBOLS[sym]
     if sym in _YF_SYM_CACHE:
         return _YF_SYM_CACHE[sym]
     if _get_info(sym).get('quoteType'):
@@ -142,7 +170,6 @@ def _resolve_yf_sym(sym: str) -> str:
             log.debug('[market_intel] %s resolved to %s', sym, resolved)
             _YF_SYM_CACHE[sym] = resolved
             return resolved
-    _YF_SYM_CACHE[sym] = sym
     return sym
 
 
@@ -669,3 +696,31 @@ def get_etf_brief_data(ticker: str) -> dict:
     except Exception as e:
         log.warning('[market_intel] etf_brief %s: %s', ticker, e)
         return {}
+
+
+def get_position_history(position, period):
+    """Read quote currency from the price response, not fund/base-currency metadata."""
+    import yfinance as yf
+
+    ticker, currency = position['ticker'], position.get('currency', 'USD')
+    preferred = _listing_symbol(position)
+    candidates = [preferred] if preferred else [ticker] + [ticker + s for s in _EU_SUFFIXES]
+    for symbol in candidates:
+        def fetch(symbol=symbol):
+            instrument = yf.Ticker(symbol)
+            frame = instrument.history(period=period, auto_adjust=True, timeout=8)
+            if frame is None or frame.empty:
+                raise LookupError('Price history unavailable')
+            quote_ccy = instrument.get_history_metadata().get('currency')
+            factor = .01 if quote_ccy in ('GBp', 'GBX') and currency == 'GBP' else 1.0
+            normalized = 'GBP' if quote_ccy in ('GBp', 'GBX') else quote_ccy
+            if normalized != currency:
+                raise LookupError('Listing quote currency does not match the contract')
+            close = frame['Close'].dropna()
+            return {'dates': close.index.strftime('%Y-%m-%d').tolist(),
+                    'prices': (close * factor).tolist(), 'symbol': symbol, 'currency': currency}
+        try:
+            return cached_fetch(('position_prices_v1', symbol, currency, period), _TTL, fetch)
+        except Exception:
+            continue
+    return None

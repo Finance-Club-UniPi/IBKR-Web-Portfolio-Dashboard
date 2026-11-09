@@ -24,10 +24,11 @@ def register(app):
         Output('summary-cards', 'children'),
         Input('portfolio-data', 'data'),
         State('connection-status', 'data'),
+        Input('portfolio-analysis', 'data'),
     )
     @safe_render('Summary')
-    def update_summary(data: PortfolioData | None, status):
-        return build_summary_cards(data, status)
+    def update_summary(data: PortfolioData | None, status, analysis=None):
+        return build_summary_cards(data, status, analysis)
 
     @app.callback(
         Output('holdings-table', 'children'),

@@ -20,7 +20,7 @@ Three portfolios are intentionally diverse for showcase purposes:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.portfolio.fx import total_fx_from_trades
 from config import cfg
@@ -245,6 +245,10 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
             'price_stale':    False,
             'currency':       currency,
             'multiplier':     1.0,
+            'valuation_as_of': datetime.now(timezone.utc).isoformat(),
+            'valuation_source': 'Synthetic demo',
+            'valuation_price': round(cur, 2),
+            'valuation_rate': 1.0 if currency == 'EUR' else 1 / 1.08,
             'price_unit_verified': True,
             'fx_native_price': round(cur, 2),
             'base_market_value':   round(mv, 2),
@@ -282,6 +286,7 @@ def build_demo_payload(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     market_data = {k: dict(v) for k, v in _MARKET_DATA.items() if k in tickers}
 
     return {
+        'valuation_rates': {'USD': {'now': 1 / 1.08, 'as_of': datetime.now(timezone.utc).isoformat(), 'source': 'Demo'}},
         'trade_fx': {p['ticker']: total_fx_from_trades(
             p, 'EUR', [{'ticker': p['ticker'], 'side': 'BUY', 'shares': p['quantity'],
                         'time': '2020-01-01'}],

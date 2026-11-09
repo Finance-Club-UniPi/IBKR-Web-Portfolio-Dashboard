@@ -1,13 +1,11 @@
-"""Risk page loading and callbacks; history is fetched only while open."""
+"""Shared background analysis for both beta cards and the Risk page."""
 
 from __future__ import annotations
 
 from dash import Input, Output, State, ctx, no_update
 
-from backend.network import run_parallel
-from backend.portfolio.history import fx_pair, get_compare_history, get_estr_history, get_portfolio_history
-from backend.portfolio.risk import compute_risk_metrics, rf_over, to_base
-from ui.callbacks.performance import _empty_figure, _holdings_payload
+from backend.portfolio.analysis import analysis_summary, request_analysis
+from ui.callbacks.performance import _empty_figure
 from ui.components.risk import build_cards, dd_figure, var_figure
 from ui.helpers import ccy_symbol
 from ui.styles import (
@@ -20,53 +18,21 @@ from ui.styles import (
 )
 
 
-def build_risk(holdings, period):
-    """Return (cards, var figure, drawdown figure, note) for the holdings and lookback."""
-    if not holdings:
-        wait = _empty_figure("Waiting for portfolio data…")
-        return [], wait, wait, ""
-    base = holdings['base']
-    calls = {
-        'portfolio': lambda: get_portfolio_history(holdings['positions'], base, period),
-        'bench':     lambda: get_compare_history('^GSPC', period),
-    }
-    rf_name = None
-    if base == 'EUR':
-        calls['rf'] = get_estr_history
-        rf_name = "€STR, ECB euro short-term rate"
-    elif base == 'USD':
-        calls['rf'] = lambda: get_compare_history('^IRX', period)
-        rf_name = "13-week US T-bill, ^IRX"
-    if base != 'USD':
-        calls['fx'] = lambda: get_compare_history(fx_pair('USD', base), period)
-    results = run_parallel(calls)
-    bench = results.get('bench')
-    bench_ccy = 'USD'
-    if base != 'USD':
-        bench = to_base(bench, results.get('fx'))
-        bench_ccy = base if bench is not None else None
-    value, excluded = results.get('portfolio') or (None, [])
-    if value is None:
-        msg = _empty_figure("Price history unavailable for this period.")
-        return [], msg, msg, "Could not build price history for these holdings."
-    rf = rf_over(results.get('rf'), value.index)
-    m = compute_risk_metrics(value, bench, rf or 0.0)
-    if m['returns'] is None:
-        msg = _empty_figure(f"Not enough history ({m['n_obs']} daily returns, need 30).")
-        return [], msg, msg, ""
-
-    rf_text = (f"Risk-free {rf * 100:.2f}% (period mean, {rf_name})" if rf is not None
-               else "Risk-free data unavailable, 0% used")
-    note = (f"{m['start']:%d %b %Y} → {m['end']:%d %b %Y}, {m['n_obs']} daily returns. Backcast of your "
-            f"current holdings valued at dividend-adjusted historical closes in {base}; cash and past trades are "
-            f"not included. This is a total-return backcast, not historical account balances. VaR and CVaR are 1-day, in {base} on the latest value. {rf_text}. "
-            f"Beta and alpha are against the S&P 500 (^GSPC) in {bench_ccy or base}"
-            + ("." if m['beta'] is not None else ", which is unavailable."))
-    if value.attrs.get('chained'):
-        note += ' Earlier history is chained from holdings with available prices and approximates today’s portfolio.'
-    if excluded:
-        note += " Not included: " + ', '.join(f"{t} ({r})" for t, r in excluded) + '.'
-    return build_cards(m, ccy_symbol(base)), var_figure(m), dd_figure(m), note
+def build_risk(data, period):
+    result = request_analysis(data, period)
+    summary = analysis_summary(result)
+    m = result.get('metrics')
+    if m is None:
+        figure = _empty_figure(result['reason'])
+        return [], figure, figure, result['reason'], summary
+    note = (f"{m['start']:%d %b %Y} → {m['end']:%d %b %Y}, {m['n_obs']} daily returns. "
+            f"Current signed exposures / account equity, including cash, in {data['account']['base_currency']}. "
+            "Historical scenarios at fixed current weights; not actual account performance. "
+            "Borrow fees, financing and trading costs are excluded. "
+            f"Valuation as of {result['valuation_as_of']}. "
+            + ('' if result['rf_available'] else 'Risk-free data unavailable; 0% used. '))
+    return (build_cards(m, ccy_symbol(data['account']['base_currency'])),
+            var_figure(m), dd_figure(m), note, summary)
 
 
 def register(app):
@@ -76,7 +42,7 @@ def register(app):
         State('risk-holdings', 'data'),
     )
     def update_risk_holdings(data, current):
-        payload = _holdings_payload(data)
+        payload = data
         return no_update if payload == current else payload
 
     @app.callback(
@@ -84,19 +50,19 @@ def register(app):
         Output('risk-var-graph', 'figure'),
         Output('risk-dd-graph', 'figure'),
         Output('risk-note', 'children'),
+        Output('portfolio-analysis', 'data'),
         Input('risk-holdings', 'data'),
         Input('risk-period', 'value'),
         Input('page-nav', 'data'),
         Input('refresh-interval', 'n_intervals'),
+        Input('fast-connect-poll', 'n_intervals'),
     )
-    def render_risk(holdings, period, page, _interval):
-        if page != 'risk':
-            return no_update, no_update, no_update, no_update
+    def render_risk(holdings, period, page, _interval, _poll):
         try:
             return build_risk(holdings, period or '1Y')
         except Exception as e:  # keep the rest of the dashboard alive
             msg = _empty_figure("Risk metrics unavailable.")
-            return [], msg, msg, f"Error: {e}"
+            return [], msg, msg, str(e), {'status': 'unavailable', 'reason': str(e), 'beta': None}
 
     @app.callback(
         Output('page-nav', 'data'),

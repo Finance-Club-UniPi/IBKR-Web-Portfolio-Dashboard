@@ -1,7 +1,7 @@
 """
 Historical trade ingestion.
 
-IBKR's live `reqExecutions` API only returns about 7 days of fills, so this
+IBKR's live `reqExecutions` retention is limited (often just today), so this
 module lets the user upload longer-range trade history as CSV exported from
 the IBKR Client Portal → Performance & Reports → Transaction History.
 
@@ -14,11 +14,15 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import os
+import shutil
 import tempfile
 import threading
+from collections import Counter
 from datetime import datetime
 from io import StringIO
+from pathlib import Path
 
 from config import DATA_DIR
 
@@ -103,7 +107,7 @@ def parse_activity_csv(content: bytes) -> list | None:
         qty    = _safe_float(d.get('Quantity'))
         price  = _safe_float(d.get('T. Price') or d.get('Trade Price'))
         dt     = _parse_dt(d.get('Date/Time'))
-        if not (symbol and qty and price and dt):
+        if not (symbol and math.isfinite(qty) and qty and math.isfinite(price) and price > 0 and dt):
             log.debug('Skipping row — missing field(s): symbol=%r qty=%r price=%r dt=%r', symbol, qty, price, dt)
             continue
         side = 'BUY' if qty > 0 else 'SELL'
@@ -115,6 +119,9 @@ def parse_activity_csv(content: bytes) -> list | None:
             'time':   dt,
             'value':  round(abs(qty) * price, 2),
             'source': 'csv',
+            'conId': int(d['Conid']) if d.get('Conid', '').isdigit() else None,
+            'currency': d.get('Currency'), 'account': d.get('Account ID'),
+            'exec_id': d.get('IB Exec ID') or d.get('Trade ID'),
         })
     if not found_trades_section:
         return None
@@ -122,13 +129,29 @@ def parse_activity_csv(content: bytes) -> list | None:
 
 
 def _trade_key(t):
+    if t.get('exec_id'):
+        return (t.get('account'), t['exec_id'])
     return (
-        t.get('ticker'),
+        t.get('account'), t.get('conId'), t.get('currency'), t.get('ticker'),
         t.get('side'),
         round(_safe_float(t.get('shares')), 4),
         round(_safe_float(t.get('price')), 4),
         t.get('time'),
     )
+
+
+def _validate_trades(trades):
+    try:
+        if not isinstance(trades, list):
+            raise ValueError('Invalid saved trade history')
+        for trade in trades:
+            if (not isinstance(trade, dict) or not trade.get('ticker') or trade.get('side') not in ('BUY', 'SELL')
+                    or not all(math.isfinite(float(trade.get(k, 0))) and float(trade.get(k, 0)) > 0
+                               for k in ('shares', 'price'))):
+                raise ValueError('Invalid trade quantity, price or identity')
+            datetime.fromisoformat(str(trade.get('time', '')))
+    except (TypeError, KeyError, OverflowError) as e:
+        raise ValueError('Invalid trade history record') from e
 
 
 def load_uploaded_trades() -> list:
@@ -137,10 +160,13 @@ def load_uploaded_trades() -> list:
     try:
         with open(_STORE_PATH, encoding='utf-8') as f:
             data = json.load(f)
-            return data if isinstance(data, list) else []
+            if isinstance(data, dict) and data.get('schema_version') == 2:
+                data = data.get('trades')
+            _validate_trades(data)
+            return data
     except Exception as e:
         log.warning('Failed to load uploaded trades: %s', e)
-        return []
+        raise ValueError('Saved trade history could not be read; upload aborted') from e
 
 
 def save_uploaded_trades(new_trades: list) -> list:
@@ -148,25 +174,18 @@ def save_uploaded_trades(new_trades: list) -> list:
     with _WRITE_LOCK:
         os.makedirs(_DATA_DIR, exist_ok=True)
         existing = load_uploaded_trades()
-        seen = {_trade_key(t) for t in existing}
+        _validate_trades(new_trades)
+        counts = Counter(_trade_key(t) for t in existing)
+        incoming = Counter()
         for trade in new_trades:
             key = _trade_key(trade)
-            if key not in seen:
+            incoming[key] += 1
+            if incoming[key] > counts[key] and (not trade.get('exec_id') or incoming[key] == 1):
                 existing.append(trade)
-                seen.add(key)
         existing.sort(key=lambda x: x.get('time') or '')
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=_DATA_DIR,
-                                             delete=False) as output:
-                temporary = output.name
-                json.dump(existing, output, indent=2, default=str)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, _STORE_PATH)
-        finally:
-            if temporary and os.path.exists(temporary):
-                os.unlink(temporary)
+        if os.path.exists(_STORE_PATH) and isinstance(json.loads(Path(_STORE_PATH).read_text()), list) and not os.path.exists(_STORE_PATH + '.v1-backup'):
+            shutil.copy2(_STORE_PATH, _STORE_PATH + '.v1-backup')
+        atomic_json(_STORE_PATH, {'schema_version': 2, 'trades': existing})
         return existing
 
 
@@ -175,3 +194,20 @@ def clear_uploaded_trades() -> list:
         if os.path.exists(_STORE_PATH):
             os.remove(_STORE_PATH)
     return []
+
+
+def atomic_json(path, data):
+    """Write a validated snapshot without replacing the old file on failure."""
+    directory = os.path.dirname(str(path))
+    os.makedirs(directory, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory, delete=False) as output:
+            temporary = output.name
+            json.dump(data, output, indent=2, allow_nan=False)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)

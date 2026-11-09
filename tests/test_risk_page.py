@@ -6,7 +6,6 @@ import io
 import numpy as np
 import pandas as pd
 import pytest
-from dash import no_update
 
 import backend.portfolio.history as history
 import ui.callbacks.risk as risk
@@ -14,92 +13,53 @@ import ui.callbacks.risk as risk
 
 @pytest.fixture
 def histories(monkeypatch):
+    import backend.portfolio.analysis as analysis
     dates = pd.bdate_range('2024-01-01', periods=100)
     bench = pd.Series(100 * np.cumprod(1 + np.random.default_rng(2).normal(.001, .01, 100)), index=dates)
-    values = bench * 2
-    calls = []
+    monkeypatch.setattr(analysis, 'get_position_history', lambda *a: {
+        'dates': dates.strftime('%Y-%m-%d').tolist(), 'prices': bench.tolist()})
+    monkeypatch.setattr(analysis, 'get_compare_history', lambda symbol, period: (
+        pd.Series(1.0, index=dates) if symbol.endswith('=X') else
+        pd.Series(3.0, index=dates) if symbol == '^IRX' else bench))
+    monkeypatch.setattr(analysis, 'get_estr_history', lambda: pd.Series(3.0, index=dates))
 
-    def portfolio(positions, base, period):
-        calls.append(('portfolio', base, period))
-        return values, []
-
-    def compare(symbol, period):
-        calls.append((symbol, period))
-        if symbol == '^IRX':
-            return pd.Series(4.0, index=dates)
-        if symbol.endswith('=X'):
-            return pd.Series(.9, index=dates)
-        return bench
-
-    monkeypatch.setattr(risk, 'get_portfolio_history', portfolio)
-    monkeypatch.setattr(risk, 'get_compare_history', compare)
-    monkeypatch.setattr(risk, 'get_estr_history', lambda: pd.Series(3.0, index=dates))
-    return values, calls
+    def request(data, period):
+        try:
+            return analysis.calculate_analysis(data, period)
+        except ValueError as e:
+            return {'status': 'unavailable', 'reason': str(e), 'period': period}
+    monkeypatch.setattr(risk, 'request_analysis', request)
+    return {'positions': [{'ticker': 'X', 'conId': 1, 'currency': 'USD', 'base_market_value': 200}],
+            'account': {'base_currency': 'USD', 'net_liquidation': 200}}
 
 
 @pytest.mark.parametrize('period', ['1Y', '3Y', '5Y'])
 @pytest.mark.parametrize('base', ['EUR', 'USD', 'GBP'])
-def test_risk_builds_all_cards_and_charts_with_base_currency(histories, period, base):
-    values, calls = histories
-    values.attrs['chained'] = [('NEW', values.index[30])]
-    cards, var, dd, note = risk.build_risk({'base': base, 'positions': []}, period)
+def test_risk_builds_shared_account_analysis(histories, period, base):
+    histories['account']['base_currency'] = base
+    cards, var, dd, note, summary = risk.build_risk(histories, period)
     assert len(cards) == 12 and len(var.data) == 2 and len(dd.data) == 2
-    assert ('portfolio', base, period) in calls
-    assert f'in {base} on the latest value' in note
-    assert 'dividend-adjusted' in note and 'chained' in note
-    if base == 'EUR':
-        assert '3.00%' in note and '€STR' in note
-    elif base == 'USD':
-        assert '4.00%' in note and ('^IRX', period) in calls
-    else:
-        assert 'Risk-free data unavailable, 0% used' in note
-        assert ('^IRX', period) not in calls
-    assert ((f'USD{base}=X', period) in calls) == (base != 'USD')
+    assert summary['beta'] == pytest.approx(1)
+    assert summary['period'] == period and 'account equity' in note
+    from backend.portfolio.positions import get_summary, process_positions
+    from ui.components.summary import build_summary_cards
+    p = {'ticker': 'X', 'quantity': 1, 'current_price': 100, 'avg_cost': 90,
+         'market_value': 100, 'unrealized_pnl': 10, 'realized_pnl': 0, 'base_market_value': 100}
+    frame = process_positions([p])
+    data = {**histories, 'positions': frame.to_dict('records'), 'summary': get_summary(frame)}
+    portfolio_cards = build_summary_cards(data, 'connected', summary)
+    assert portfolio_cards[-1].children[1].children == cards[9].children[1].children
 
 
-@pytest.mark.parametrize('missing', ['bench', 'fx', 'rf', 'portfolio', 'short'])
-def test_missing_history_degrades_without_breaking_page(histories, monkeypatch, missing):
-    values, _ = histories
-    original = risk.get_compare_history
-    monkeypatch.setattr(risk, 'get_compare_history', lambda s, p: (
-        None if (missing == 'bench' and s == '^GSPC') or (missing == 'fx' and s.endswith('=X'))
-        else original(s, p)))
-    if missing == 'rf':
-        monkeypatch.setattr(risk, 'get_estr_history', lambda: None)
-    if missing == 'portfolio':
-        monkeypatch.setattr(risk, 'get_portfolio_history', lambda *a: (None, []))
-    if missing == 'short':
-        monkeypatch.setattr(risk, 'get_portfolio_history', lambda *a: (values.iloc[:10], []))
-    cards, var, _, note = risk.build_risk({'base': 'EUR', 'positions': []}, '1Y')
-    if missing in ('short', 'portfolio'):
-        assert not cards
-        assert var.layout.annotations
-    else:
-        assert len(cards) == 12
-        if missing == 'rf':
-            assert '0% used' in note
-        else:
-            assert cards[9].children[1].children == '—'
-
-
-def test_hidden_risk_page_skips_history_and_errors_stay_on_risk_page(monkeypatch):
+def test_analysis_error_is_visible_without_breaking_navigation(monkeypatch):
     asyncio.set_event_loop(asyncio.new_event_loop())
     from ui.app import app
     callback = next(v['callback'].__wrapped__ for k, v in app.callback_map.items() if 'risk-cards.children' in k)
-
-    def fail(*args):
-        pytest.fail('Hidden risk page fetched history')
-
-    monkeypatch.setattr(risk, 'build_risk', fail)
-    assert callback(None, '1Y', 'portfolio', 0) == (no_update,) * 4
-
-    def unavailable(*args):
-        raise ValueError('History service down')
-
-    monkeypatch.setattr(risk, 'build_risk', unavailable)
-    cards, var, _, note = callback({}, '1Y', 'risk', 0)
-    assert cards == [] and 'History service down' in note
-    assert var.layout.annotations[0].text == 'Risk metrics unavailable.'
+    monkeypatch.setattr(risk, 'request_analysis', lambda *a: {
+        'status': 'unavailable', 'reason': 'FX history unavailable', 'period': '1Y'})
+    cards, var, _, note, summary = callback({}, '1Y', 'portfolio', 0, 0)
+    assert cards == [] and 'FX history unavailable' in note
+    assert summary['beta'] is None and var.layout.annotations
 
 
 def test_navigation_roundtrip_keeps_demo_switcher_and_both_pages():
@@ -151,10 +111,11 @@ def test_risk_callback_serializes_cards_and_charts_over_http(histories):
         'output': key,
         'outputs': [{'id': out.component_id, 'property': out.component_property}
                     for out in app.callback_map[key]['output']],
-        'inputs': [{'id': 'risk-holdings', 'property': 'data', 'value': {'base': 'EUR', 'positions': []}},
+        'inputs': [{'id': 'risk-holdings', 'property': 'data', 'value': histories},
                    {'id': 'risk-period', 'property': 'value', 'value': '1Y'},
                    {'id': 'page-nav', 'property': 'data', 'value': 'risk'},
-                   {'id': 'refresh-interval', 'property': 'n_intervals', 'value': 0}],
+                   {'id': 'refresh-interval', 'property': 'n_intervals', 'value': 0},
+                   {'id': 'fast-connect-poll', 'property': 'n_intervals', 'value': 0}],
         'state': [], 'changedPropIds': ['page-nav.data'],
     })
     assert response.status_code == 200
@@ -182,3 +143,49 @@ def test_demo_portfolio_selection_still_triggers_refresh(monkeypatch):
     new_id, refresh = callback([0, 1, 0], 'balanced', 5)
     assert new_id == 'growth' and refresh == 6
     assert broker.get_demo_portfolio() == 'growth'
+
+
+def test_summary_callback_reads_the_shared_analysis_over_http(histories):
+    from backend.portfolio.positions import get_summary, process_positions
+    from ui.app import app
+    p = dict(ticker='X', quantity=1, current_price=100, avg_cost=90, market_value=100,
+             unrealized_pnl=10, realized_pnl=0, base_market_value=100)
+    df = process_positions([p])
+    data = {**histories, 'positions': df.to_dict('records'), 'summary': get_summary(df)}
+    import json
+
+    from plotly.utils import PlotlyJSONEncoder
+    data = json.loads(json.dumps(data, cls=PlotlyJSONEncoder))
+    response = app.server.test_client().post('/_dash-update-component', json={
+        'output': 'summary-cards.children', 'outputs': {'id': 'summary-cards', 'property': 'children'},
+        'inputs': [{'id': 'portfolio-data', 'property': 'data', 'value': data},
+                   {'id': 'portfolio-analysis', 'property': 'data', 'value': {'beta': -1.25, 'period': '3Y'}}],
+        'state': [{'id': 'connection-status', 'property': 'data', 'value': 'connected'}],
+        'changedPropIds': ['portfolio-analysis.data'],
+    })
+    assert response.status_code == 200
+    cards = response.json['response']['summary-cards']['children']
+    assert cards[-1]['props']['children'][1]['props']['children'] == '-1.25'
+
+
+def test_pdf_receives_shared_beta_and_rejects_a_different_book(histories, monkeypatch):
+    import ui.callbacks.export as export
+    from backend.portfolio.analysis import fingerprint
+    received = []
+    monkeypatch.setattr(export, 'build_pdf', lambda data, *args, **kwargs: (received.append(data) or b'PDF', 'test.pdf'))
+
+    class App:
+        def callback(self, *args, **kwargs):
+            def register(fn):
+                self.export = fn
+                return fn
+            return register
+
+    app = App()
+    export.register(app)
+    shared = {'beta': -.5, 'period': '3Y', 'input_key': fingerprint(histories, '3Y')}
+    app.export(1, histories, {}, shared)
+    assert received[-1]['analysis']['beta'] == -.5
+    histories['positions'][0]['quantity'] = 5
+    app.export(2, histories, {}, shared)
+    assert 'beta' not in received[-1]['analysis']

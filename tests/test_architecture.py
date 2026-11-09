@@ -56,7 +56,8 @@ def test_unfinished_fx_task_never_produces_aggregate_fallback(monkeypatch):
         def shutdown(self, **kwargs):
             pass
 
-    monkeypatch.setattr(service.concurrent.futures, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(service, '_ENRICH_POOL', Pool())
+    monkeypatch.setattr(service, '_ENRICH_JOBS', {})
     monkeypatch.setattr(service.concurrent.futures, 'wait', lambda *args, **kwargs: None)
     monkeypatch.setattr(service, 'load_uploaded_trades', lambda: [])
     raw = build_demo_payload()

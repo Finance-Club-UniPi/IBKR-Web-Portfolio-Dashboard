@@ -54,10 +54,14 @@ def _period_btn(label, active):
     })
 
 
-def _build_price_sparkline(ticker, period, avg_cost, trades=None):
+def _build_price_sparkline(ticker, period, avg_cost, trades=None, position=None):
     yf_period = _PERIOD_TO_YF.get(period, '1mo')
     try:
-        hist = get_price_history([ticker], yf_period)
+        if position:
+            from backend.providers.market_data import get_position_history
+            hist = {ticker: get_position_history(position, yf_period)}
+        else:
+            hist = get_price_history([ticker], yf_period)
     except Exception as e:
         log.debug('sparkline fetch failed for %s: %s', ticker, e)
         hist = {}
@@ -69,6 +73,8 @@ def _build_price_sparkline(ticker, period, avg_cost, trades=None):
                       style={'color': COLOR_TEXT_MID, 'fontSize': '14px', 'fontWeight': '500',
                              'textAlign': 'center', 'margin': '24px 0 8px'})
 
+    from ui.helpers import ccy_symbol
+    currency_symbol = ccy_symbol((position or {}).get('currency', 'USD'))
     first, last = prices[0], prices[-1]
     up = last >= first
     line_color = COLOR_GOOD if up else COLOR_BAD
@@ -78,14 +84,14 @@ def _build_price_sparkline(ticker, period, avg_cost, trades=None):
         x=dates, y=prices, mode='lines',
         line=dict(color=line_color, width=2),
         fill='tozeroy', fillcolor=fill_color,
-        hovertemplate='%{x}<br>$%{y:,.2f}<extra></extra>',
+        hovertemplate='%{x}<br>' + currency_symbol + '%{y:,.2f}<extra></extra>',
     ))
     # Average cost reference line (if we know it and it's within chart range)
     if avg_cost and avg_cost == avg_cost and avg_cost > 0:
         lo, hi = min(prices), max(prices)
         if lo * 0.6 <= avg_cost <= hi * 1.4:
             fig.add_hline(y=avg_cost, line=dict(color='#888', width=1, dash='dot'),
-                          annotation_text=f'Avg ${avg_cost:,.2f}',
+                          annotation_text=f'Avg {currency_symbol}{avg_cost:,.2f}',
                           annotation_position='top left',
                           annotation=dict(font=dict(size=12, color='#888')))
 
@@ -106,7 +112,7 @@ def _build_price_sparkline(ticker, period, avg_cost, trades=None):
             side   = (t.get('side') or '').upper()
             shares = t.get('shares') or 0
             price_ = t.get('price') or 0
-            hover  = f"{side} {shares:g} @ ${price_:,.2f}<br>{tm}"
+            hover  = f"{side} {shares:g} @ {currency_symbol}{price_:,.2f}<br>{tm}"
             if side == 'BUY':
                 buys_x.append(tm);  buys_y.append(y);  buys_hover.append(hover)
             elif side == 'SELL':

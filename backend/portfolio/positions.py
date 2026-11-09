@@ -19,7 +19,7 @@ from backend.portfolio.fx import daily_fx_impact
 
 
 def process_positions(positions, market_data=None, *, base_currency='EUR', daily_fx_rates=None,
-                      betas=None, trade_fx=None):
+                      betas=None, trade_fx=None, equity=None):
     if not positions:
         return pd.DataFrame()
     trade_fx = trade_fx or {}
@@ -30,16 +30,18 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
 
     if 'price_stale' not in df.columns:
         df['price_stale'] = False
-    df['pnl_pct'] = ((df['current_price'] - df['avg_cost']) / df['avg_cost'] * 100).round(2)
+    df['pnl_pct'] = ((df['current_price'] - df['avg_cost']) / df['avg_cost'].abs() * 100 * df['quantity'].apply(lambda q: -1 if q < 0 else 1)).round(2)
     df['total_cost'] = (df['avg_cost'] * df['quantity']).round(2)
 
     base_values = _verified_base_values(df)
-    total_base_value = base_values.sum() if base_values is not None else None
+    total_base_value = base_values.abs().sum() if base_values is not None else None
     if (total_base_value is not None and total_base_value > 0
             and math.isfinite(float(total_base_value))):
-        df['allocation_pct'] = ((base_values / total_base_value) * 100).round(2)
+        df['allocation_pct'] = ((base_values.abs() / total_base_value) * 100).round(2)
     else:
         df['allocation_pct'] = float('nan')
+
+    df['signed_exposure_pct'] = base_values / equity * 100 if base_values is not None and equity and equity > 0 else float('nan')
 
     # Market data enrichment
     daily_changes = []
@@ -106,7 +108,9 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
     # Only complete trade-lot estimates can supply since-purchase FX.
     sources = []
     for _, row in df.iterrows():
-        ticker = row['ticker']
+        ticker = row.get('position_id') or row['ticker']
+        if ticker not in trade_fx and df['ticker'].tolist().count(row['ticker']) == 1:
+            ticker = row['ticker']
         if ticker in trade_fx:
             value, reason = trade_fx[ticker]
             source = 'trade history'
@@ -125,33 +129,6 @@ def process_positions(positions, market_data=None, *, base_currency='EUR', daily
     return df
 
 
-def portfolio_beta(df):
-    """Value-weighted beta of the holdings that have one.
-
-    Weights are re-normalised over the covered holdings, so a missing beta
-    never drags the result toward zero. Cash is excluded (invested beta).
-    Returns (beta | None, covered_weight_pct, covered_count).
-    """
-    if df.empty or 'beta' not in df.columns:
-        return None, 0.0, 0
-    base_values = _verified_base_values(df)
-    if base_values is None:
-        return None, 0.0, 0
-    if (base_values < 0).any():
-        return None, 0.0, 0
-    total = base_values.sum()
-    if not math.isfinite(float(total)) or total <= 0:
-        return None, 0.0, 0
-    known_mask = df['beta'].apply(lambda v: pd.notna(v) and math.isfinite(float(v))) & (base_values > 0)
-    known = df.loc[known_mask]
-    covered_values = base_values[known_mask]
-    covered = covered_values.sum()
-    if not total or not covered:
-        return None, 0.0, 0
-    beta = (known['beta'] * covered_values).sum() / covered
-    return round(float(beta), 2), round(float(covered / total * 100), 1), len(known)
-
-
 def _verified_base_values(df):
     """Return finite per-position base-currency values only when all are known."""
     if 'base_market_value' not in df.columns:
@@ -166,8 +143,8 @@ def get_summary(df):
     if df.empty:
         return {}
 
-    total_cost = df['total_cost'].sum()
-    total_value = df['market_value'].sum()
+    base_values = _verified_base_values(df)
+    total_value = base_values.sum() if base_values is not None else df['market_value'].sum()
     total_unrealized = df['unrealized_pnl'].sum()
     total_realized = df['realized_pnl'].sum()
 
@@ -176,7 +153,7 @@ def get_summary(df):
 
     fx = df['fx_today'].dropna() if 'fx_today' in df.columns else df['market_value'].iloc[0:0]
     fx_all = df['fx_total'].dropna() if 'fx_total' in df.columns else fx.iloc[0:0]
-    beta, beta_coverage_pct, beta_count = portfolio_beta(df)
+    beta, beta_coverage_pct, beta_count = None, 0.0, 0
     if df['allocation_pct'].notna().all():
         largest_idx = df['allocation_pct'].idxmax()
         largest_position = df.loc[largest_idx, 'ticker']
@@ -196,7 +173,7 @@ def get_summary(df):
         'portfolio_beta':      beta,
         'beta_coverage_pct':   beta_coverage_pct,
         'beta_covered':        beta_count,
-        'total_pnl_pct':       round(total_unrealized / total_cost * 100, 2) if total_cost else 0,
+        'total_pnl_pct':       None,
         'num_positions':       len(df),
         'best_performer':      df.loc[df['pnl_pct'].idxmax(), 'ticker'],
         'worst_performer':     df.loc[df['pnl_pct'].idxmin(), 'ticker'],

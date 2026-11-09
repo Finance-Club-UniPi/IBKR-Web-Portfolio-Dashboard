@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.portfolio.positions import get_summary, portfolio_beta, process_positions
+from backend.portfolio.positions import get_summary, process_positions
 from backend.providers.demo import build_demo_payload
 
 
@@ -21,26 +21,10 @@ def test_beta_column_maps_by_ticker_and_defaults_to_nan():
     assert build(None)['beta'].isna().all()
 
 
-def test_portfolio_beta_is_value_weighted():
-    df = build({t: 1.0 for t in build(None).ticker})
-    assert portfolio_beta(df) == (1.0, 100.0, 8)
-
-    df = build({'AAPL': 2.0, 'MSFT': 0.0})
-    aapl, msft = (df.loc[df.ticker == t, 'market_value'].iloc[0] for t in ('AAPL', 'MSFT'))
-    beta, coverage, count = portfolio_beta(df)
-    assert beta == pytest.approx(2.0 * aapl / (aapl + msft), abs=0.01)
-    assert count == 2 and 0 < coverage < 100
-
-
-def test_missing_betas_do_not_drag_result_toward_zero():
-    assert portfolio_beta(build({'NVDA': 1.7}))[0] == 1.7
-    assert portfolio_beta(build({})) == (None, 0.0, 0)
-
-
 def test_summary_totals():
     df = build({'AAPL': 1.1})
     s = get_summary(df)
-    assert s['portfolio_beta'] == 1.1 and s['beta_covered'] == 1
+    assert s['portfolio_beta'] is None  # Shared historical beta arrives separately.
     assert s['total_realized_pnl'] == pytest.approx(-258.35)
     assert s['total_fx_today'] == pytest.approx(df['fx_today'].dropna().sum(), abs=0.01)
     assert s['fx_covered'] == int(df['fx_today'].notna().sum()) == 8
@@ -77,11 +61,11 @@ def test_ui_renders_cards_and_beta_column():
     data = {'positions': df.to_dict('records'), 'summary': get_summary(df),
             'account': raw['account']}
 
-    cards = callbacks['update_summary'](data, 'connected')
+    cards = callbacks['update_summary'](data, 'connected', {'beta': -1.2, 'period': '1Y'})
     assert len(cards) == 8
     values = {c.children[0].children: c.children[1].children for c in cards}
     assert values['Realized P&L'] == '€-258.35'
-    assert values['Portfolio beta'] == f"{data['summary']['portfolio_beta']:.2f}"
+    assert values['Portfolio beta'] == '-1.20'
     assert values['FX today'].startswith('€-')
     assert values['FX total'].startswith('€+')   # USD names bought at 1.12, now 1.08
 

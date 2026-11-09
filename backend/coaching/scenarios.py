@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 
 from backend.portfolio.exposure import sector_geo_breakdown
+from backend.portfolio.positions import daily_pnl as select_daily_pnl
 
 # ── Presentation helpers ──────────────────────────────────────────────────────
 
@@ -32,9 +33,9 @@ def _not_ready(reason: str):
                    tone='info')
 
 
-def _fmt_money(v: float, port) -> str:
+def _fmt_money(v: float, port, verified=False) -> str:
     account = port.get('account') or {}
-    if account.get('portfolio_value_units') != 'base':
+    if account.get('portfolio_value_units') != 'base' and not verified:
         return 'unavailable (unverified currency units)'
     currency = account.get('base_currency') or 'unknown currency'
     sign = '-' if v < 0 else ''
@@ -53,11 +54,11 @@ def scenario_performance(port, _intel, _val):
         return _not_ready("Positions haven't loaded yet.")
     s = port['summary']
     pnl      = s.get('total_unrealized_pnl', 0)
-    pnl_pct  = s.get('total_pnl_pct', 0)
+    pnl_pct  = s.get('total_pnl_pct')
     best     = s.get('best_performer', '—')
     worst    = s.get('worst_performer', '—')
     total    = s.get('total_value', 0)
-    daily    = s.get('total_daily_pnl')
+    daily    = select_daily_pnl(port.get('account') or {}, s)
 
     # find per-ticker p&l% for the best/worst for richer text
     by_ticker = {p['ticker']: p for p in port['positions']}
@@ -66,10 +67,10 @@ def scenario_performance(port, _intel, _val):
 
     losers = [p for p in port['positions'] if p.get('pnl_pct', 0) < 0]
 
-    tone = 'good' if pnl_pct >= 0 else 'warn'
+    tone = 'info' if pnl_pct is None else ('good' if pnl_pct >= 0 else 'warn')
     lines = [
         f"Portfolio value: {_fmt_money(total, port)} · Unrealised P&L: "
-        f"{_fmt_money(pnl, port)} ({_fmt_pct(pnl_pct)} on cost).",
+        f"{_fmt_money(pnl, port)}" + (f" ({_fmt_pct(pnl_pct)} on cost)." if pnl_pct is not None else ' (cost-based return unavailable).'),
         f"Biggest winner: {best} ({_fmt_pct(best_pct)}). "
         + (f"Biggest drag: {worst} ({_fmt_pct(worst_pct)})."
            if losers else "No losers today — every position is in the green, which is a good reminder that this won't always be the case."),
@@ -77,7 +78,7 @@ def scenario_performance(port, _intel, _val):
     if daily is not None:
         lines.append(f"Today's move: {_fmt_money(daily, port)}.")
 
-    headline = ("Good shape — up overall." if pnl_pct >= 0
+    headline = ("Portfolio snapshot — cost-based return unavailable." if pnl_pct is None else "Good shape — up overall." if pnl_pct >= 0
                 else "Down overall — worth reviewing which positions are dragging.")
     return _answer(headline, lines, tone=tone)
 
@@ -106,8 +107,8 @@ def scenario_biggest_risk(port, intel, val):
     # Rank risks: concentration > sector > valuation
     if top_pct >= 50:
         body = [
-            f"Concentration. {top} alone is {top_pct:.0f}% of your portfolio — "
-            f"if it drops 10%, that's about {top_pct/10:.1f}% of everything.",
+            f"Concentration. {top} alone is {top_pct:.0f}% of gross position exposure. "
+            "A large position increases sensitivity to that security, whether long or short.",
             "For a beginner diversified portfolio, many advisors cap any single position at 20–30%. "
             "Above 50% is a large single-name bet — fine if intentional, worth knowing either way.",
         ]
@@ -157,12 +158,16 @@ def scenario_what_if(port, _intel, _val):
            or p['allocation_pct'] < 0 for p in positions):
         return _not_ready('Verified base-currency holding weights are unavailable.')
     top = max(positions, key=lambda p: p['allocation_pct'])
-    total_value = sum(p['base_market_value'] for p in positions)
-    share = top.get('allocation_pct', 0) / 100.0
-    impact_pct = share * 20.0
-    impact_eur = total_value * share * 0.20
+    equity = (port.get('account') or {}).get('net_liquidation')
+    if not equity or equity <= 0:
+        return _not_ready('Positive account equity is required.')
+    impact_eur = top['base_market_value'] * 0.20
+    impact_pct = abs(impact_eur) / equity * 100
+    if impact_eur < 0:
+        return _answer(f"If {top['ticker']} drops 20%, the short gains about {_fmt_money(-impact_eur, port, verified=True)}.",
+                       [f"About {impact_pct:.1f}% of account equity, before borrowing costs."], 'info')
 
-    headline = f"If {top['ticker']} drops 20%, you'd lose about {_fmt_money(impact_eur, port)}."
+    headline = f"If {top['ticker']} drops 20%, you'd lose about {_fmt_money(impact_eur, port, verified=True)}."
     body = [
         f"That's roughly {impact_pct:.1f}% of your total portfolio value.",
         "The rest of your holdings wouldn't automatically offset that — they move somewhat independently.",
@@ -206,8 +211,8 @@ def scenario_sector_geo(port, intel, _val):
     top_geo_pct = top_countries[0][1] if top_countries else 0
 
     body = [
-        f"Sector mix (top 3): {sec_str}.",
-        f"Geography (top 3): {geo_str}.",
+        f"Gross sector mix (top 3): {sec_str}.",
+        f"Gross geography (top 3): {geo_str}.",
     ]
     if top_sec_pct >= 45:
         body.append(f"Heads-up: {top_sectors[0][0]} is ~{top_sec_pct:.0f}% of your portfolio — concentrated. "
@@ -229,6 +234,8 @@ def scenario_vs_market(port, _intel, val):
         return _not_ready("Positions haven't loaded yet.")
 
     your_pct = port['summary'].get('total_pnl_pct', 0)
+    if your_pct is None:
+        return _not_ready('A verified cost-based portfolio return is unavailable; use the historical performance chart for the benchmark comparison.')
 
     # Best effort: use S&P 500 ytd from CAPE/Buffett? We don't have ytd here.
     # Show your return and compare qualitatively to long-run equity average (~8%/yr).

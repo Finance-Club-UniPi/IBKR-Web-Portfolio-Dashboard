@@ -191,6 +191,8 @@ def daily_fx_impact(position: dict, base_currency: str, rates: dict) -> tuple[fl
     if not valid_positive(multiplier):
         return None, 'Contract multiplier is unavailable'
     rate = rates.get(currency)
+    if rate and rate.get('as_of') and not fresh_quote_time(datetime.fromisoformat(rate['as_of']), max_age=timedelta(days=5)):
+        return None, 'FX observation is older than five days'
     if not rate or not valid_positive(rate.get('now')) or not valid_positive(rate.get('previous')):
         return None, 'Current or previous FX rate is missing or stale'
     try:

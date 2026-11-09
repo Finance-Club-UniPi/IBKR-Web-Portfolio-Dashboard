@@ -4,6 +4,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+import pandas as pd
+
 import backend.providers.fx_history as fx_history
 from backend.portfolio.positions import process_positions
 
@@ -30,19 +32,20 @@ class TestTradeLotFx(unittest.TestCase):
 
         pending = process_positions([position], base_currency='EUR', daily_fx_rates=rates)
         self.assertTrue(pending['fx_total'].isna().all())
-        self.assertEqual(complete['AAPL'], (90.0, ''))
+        self.assertIsNone(complete['AAPL'][0])
+        self.assertIn('unverified', complete['AAPL'][1])
 
         result = process_positions(
             [position], {}, base_currency='EUR', daily_fx_rates=rates, trade_fx=complete,
         )
-        self.assertEqual(result.loc[0, 'fx_total'], 90.0)
-        self.assertEqual(result.loc[0, 'fx_total_source'], 'trade history')
+        self.assertTrue(pd.isna(result.loc[0, 'fx_total']))
+        self.assertIsNone(result.loc[0, 'fx_total_source'])
 
         result = process_positions(
             [position], {}, base_currency='EUR', daily_fx_rates=rates, trade_fx=incomplete,
         )
         self.assertTrue(result['fx_total'].isna().all())
-        self.assertIn('covers 1 of 2 shares', result.loc[0, 'fx_total_reason'])
+        self.assertIn('unverified', result.loc[0, 'fx_total_reason'])
 
 
 if __name__ == '__main__':

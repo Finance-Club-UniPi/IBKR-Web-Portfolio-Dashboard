@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 
 from backend.network import fetch_parallel, fetch_with_retry
+from backend.providers.market_data import _yf_info
 from backend.storage.cache import cached_fetch
 
 log = logging.getLogger(__name__)
@@ -23,10 +24,8 @@ def _fetch_one_dividend(sym: str):
     """Hit yfinance for a single symbol's dividend info. Returns a dict or
     None. Retries transient failures; returns None (not raise) after
     exhausting retries so a single bad ticker doesn't poison the batch."""
-    import yfinance as yf
-
     def once():
-        info     = yf.Ticker(sym).info
+        info     = _yf_info(sym)
         div_rate = info.get('dividendRate') or info.get('trailingAnnualDividendRate')
         if not div_rate or float(div_rate) <= 0:
             return None

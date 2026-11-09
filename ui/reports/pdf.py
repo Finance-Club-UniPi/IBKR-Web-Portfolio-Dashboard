@@ -199,6 +199,13 @@ def build_pdf(data, intel=None, *, demo=False):
     worst_row = df[df['ticker'] == worst].iloc[0] if worst != '—' and worst in df['ticker'].values else None
     best_str  = f"{best} ({best_row['pnl_pct']:+.2f}%)"   if best_row  is not None else best
     worst_str = f"{worst} ({worst_row['pnl_pct']:+.2f}%)" if worst_row is not None else worst
+    analysis = data.get('analysis') or {}
+    beta_text = f"{analysis['beta']:.2f}" if analysis.get('beta') is not None else analysis.get('reason', 'Analysis loading')
+    if analysis.get('valuation_as_of'):
+        beta_text += f" (valued {analysis['valuation_as_of'][:16].replace('T', ' ')})"
+    perf.append(Paragraph(f"Account-equity beta ({analysis.get('period', '1Y')}): " +
+                          beta_text,
+                          styles['BodyText']))
     perf_data = [
         ['Total Return', "Today", 'Best Performer', 'Worst Performer'],
         [pct_cell(total_pct), pct_cell(today_pct), best_str, worst_str],
@@ -263,9 +270,9 @@ def build_pdf(data, intel=None, *, demo=False):
         rt.setStyle(TableStyle(rt_style))
         perf.append(Spacer(1, 3*mm))
         perf.append(rt)
-        note = (f"Portfolio = today's holdings valued at historical closes in {base_ccy} "
-                f"(cash and past trades excluded; prices include dividend adjustments). {BENCHMARK_NAME} is the price "
-                "index in USD.")
+        note = (f"Portfolio = account-equity scenarios in {base_ccy} at fixed current signed exposures, "
+                "including foreign cash FX. Dividend-adjusted prices; past trades, financing, borrow fees and "
+                f"trading costs excluded. {BENCHMARK_NAME} is the price index converted to {base_ccy}.")
         if excluded:
             note += " Not included (no usable price history): " + ', '.join(
                 f"{t} ({r})" for t, r in excluded) + '.'
@@ -293,7 +300,7 @@ def build_pdf(data, intel=None, *, demo=False):
     if sg:
         sectors, countries = sector_geo_breakdown(data['positions'], sg)
         geo = []
-        section_header("Sector & Geography", geo)
+        section_header("Gross sector & geography allocation", geo)
         body_style = ParagraphStyle('sgcell', parent=styles['Normal'], fontSize=7.5, leading=9,
                                     textColor=colors.HexColor('#444444'))
         top_sectors, rest = sectors[:8], sectors[8:]
@@ -339,7 +346,7 @@ def build_pdf(data, intel=None, *, demo=False):
     pnl_sym = sym if values_base else ''
     hold_data = [['Ticker', 'Sector', 'Qty', 'Avg Cost', 'Price', 'Day %',
                   f'Value ({base_ccy})' if values_base else 'Value (TWS)',
-                  'P&L', 'P&L %', '52w %', 'Weight']]
+                  'P&L', 'P&L %', '52w %', 'Exposure / equity']]
     for _, row in df.iterrows():
         day_pct = row.get('daily_change_pct')
         day_str = f"{day_pct:+.2f}%" if pd.notna(day_pct) and day_pct is not None else '—'
@@ -358,7 +365,7 @@ def build_pdf(data, intel=None, *, demo=False):
             f"{pnl_sym}{row['unrealized_pnl']:+,.2f}",
             f"{row['pnl_pct']:+.2f}%",
             f"{rng:.0f}%" if rng is not None and pd.notna(rng) else '—',
-            f"{row['allocation_pct']:.1f}%",
+            f"{row.get('signed_exposure_pct', row['allocation_pct']):+.1f}%",
         ])
     # Widths sum to 180mm — same span as every other section.
     ht = Table(hold_data, repeatRows=1,

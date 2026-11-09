@@ -27,8 +27,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from ib_async import IB, ExecutionFilter, Forex
@@ -36,22 +37,48 @@ from ib_async import IB, ExecutionFilter, Forex
 from backend.portfolio.fx import (
     fresh_quote_time,
     fx_session_open,
-    position_value_in_base,
     previous_daily_close,
     quote_to_base,
     valid_positive,
 )
+from backend.portfolio.valuation import value_positions
 from config import cfg
 
 log = logging.getLogger(__name__)
 
 _MAX_BACKOFF   = 120   # seconds
 _BASE_BACKOFF  =   5   # seconds
+_FX_QUOTE_TIMEOUT = 3.0
+_FX_BUDGET = 5.0
 
 # Common IBKR API ports. The configured port is tried first; if it fails we
 # fall through the rest so the dashboard works with either IB Gateway or TWS,
 # paper or live, without the user having to edit config.
 _FALLBACK_PORTS = [7497, 4002, 7496, 4001]
+
+
+async def _fx_ticker(ib, pair, timeout):
+    """Read a bounded FX stream and release it once a new quote arrives."""
+    try:
+        async with asyncio.timeout(timeout):
+            qualified = await ib.qualifyContractsAsync(Forex(pair))
+            if not qualified or qualified[0] is None or qualified[0].conId <= 0:
+                return None
+            contract = qualified[0]
+            started = datetime.now(timezone.utc)
+            ticker = ib.reqMktData(contract, snapshot=False)
+            try:
+                while not valid_positive(ticker.marketPrice()) or not ticker.time or ticker.time < started:
+                    await asyncio.sleep(0.05)
+                return ticker
+            finally:
+                try:
+                    ib.cancelMktData(contract)
+                except Exception as e:
+                    log.debug('FX quote %s cleanup failed: %s', pair, e)
+    except Exception as e:
+        log.debug('FX quote %s unavailable: %s', pair, e)
+        return None
 
 
 class _IBKRConnection:
@@ -61,6 +88,10 @@ class _IBKRConnection:
         self._connected: bool                    = False
         self._fetch_lock   = threading.Lock()
         self._conn_attempt = 0   # counts consecutive failures for back-off
+        self._observed = {}
+        self._extra_tasks = {}
+        self._extra_results = {}
+        self._fx_quotes = {}
         self._retry_event: asyncio.Event | None = None   # wakes the reconnect sleep
 
         # Config (set by start())
@@ -176,6 +207,12 @@ class _IBKRConnection:
 
             for port in self._candidate_ports():
                 ib = IB()
+                if os.environ.get('IBKR_REPORT_TIMEZONE'):
+                    ib.TimezoneTWS = os.environ['IBKR_REPORT_TIMEZONE']
+                ib.accountValueEvent += lambda v: self._observed.update({
+                    ('account', v.account, v.tag, v.currency): datetime.now(timezone.utc).isoformat()})
+                ib.updatePortfolioEvent += lambda v: self._observed.update({
+                    ('position', v.account, v.contract.conId): datetime.now(timezone.utc).isoformat()})
                 ev = asyncio.Event()
 
                 def _on_disconnect(_e=ev):
@@ -232,6 +269,10 @@ class _IBKRConnection:
                 raise
             finally:
                 self._connected = False
+                for task in self._extra_tasks.values():
+                    task.cancel()
+                await asyncio.gather(*self._extra_tasks.values(), return_exceptions=True)
+                self._extra_tasks.clear()
                 self._ib        = None
                 if on_disc is not None:
                     connected_ib.disconnectedEvent -= on_disc
@@ -302,6 +343,7 @@ class _IBKRConnection:
                     market_price = item.averageCost
 
             positions.append({
+                'account':        getattr(item, 'account', ''),
                 'ticker':         item.contract.symbol,
                 'conId':          item.contract.conId,
                 'quantity':       item.position,
@@ -314,6 +356,7 @@ class _IBKRConnection:
                 'currency':       (item.contract.currency or '').upper(),
                 # The FX estimate uses a fresh contract quote below; we do not
                 # infer native price units from PortfolioItem.marketPrice.
+                'primary_exchange': item.contract.primaryExchange,
                 'multiplier':     1.0 if item.contract.secType == 'STK' else None,
                 'price_unit_verified': False,
             })
@@ -321,6 +364,27 @@ class _IBKRConnection:
 
         # ── Account values (synchronous TWS cache — fast) ─────────────────────
         av = ib.accountValues()
+        accounts = {getattr(v, 'account', '') for v in av} - {''}
+        selected = os.environ.get('IBKR_ACCOUNT')
+        if selected and selected not in accounts:
+            raise ValueError('Configured IBKR_ACCOUNT was not supplied by the broker')
+        if selected:
+            av = [v for v in av if v.account == selected]
+            positions = [p for p in positions if p.get('account') == selected]
+        elif len(accounts) > 1:
+            raise ValueError('Set IBKR_ACCOUNT to select one account; accounts cannot be combined.')
+        account_id = selected or next(iter(accounts), '')
+        if selected:
+            included = {p['conId'] for p in positions}
+            contracts = [c for c in contracts if c.conId in included]
+        ready = not any(v.tag == 'AccountReady' and str(v.value).lower() == 'false' for v in av)
+        received = datetime.now(timezone.utc).isoformat()
+        valuation_rates = {}
+        for v in av:
+            if v.tag == 'ExchangeRate' and len(v.currency) == 3 and valid_positive(v.value):
+                valuation_rates[v.currency] = {
+                    'now': float(v.value), 'source': 'IBKR account ExchangeRate',
+                    'as_of': self._observed.get(('account', account_id, v.tag, v.currency), received)}
 
         def get_av(tag, currency='USD'):
             for v in av:
@@ -333,13 +397,17 @@ class _IBKRConnection:
 
         # Detect the account's base currency (e.g. 'EUR', 'USD', 'GBP').
         # BaseCurrency is a string tag — its value is the ISO code, not a number.
-        base_ccy = 'EUR'
-        for v in av:
-            if v.tag == 'BaseCurrency' and v.value:
-                base_ccy = v.value.strip().upper()
-                break
+        base_ccy = next((v.value.strip().upper() for v in av if v.tag == 'BaseCurrency' and v.value), None)
+        if base_ccy is None:
+            nlv_currencies = {v.currency for v in av if v.tag == 'NetLiquidation' and v.currency != 'BASE'}
+            if len(nlv_currencies) != 1:
+                raise ValueError('IBKR account base currency is unavailable or ambiguous')
+            base_ccy = nlv_currencies.pop()
 
         account = {
+            'account_id': account_id, 'account_ready': ready,
+            'as_of': self._observed.get(('account', account_id, 'NetLiquidation', base_ccy), received),
+            'cash_balances': {v.currency: float(v.value) for v in av if v.tag == 'CashBalance' and v.currency not in ('BASE', '')},
             'base_currency':        base_ccy,
             # TWS PortfolioItem does not identify the units of marketValue /
             # P&L, and the TWS display can be configured for base values.
@@ -361,6 +429,17 @@ class _IBKRConnection:
             'eurusd_rate':          cfg['display']['eurusd_fallback'],
         }
 
+        from backend.portfolio.valuation import recent
+        from backend.storage.cache import _MISS, _cache_read, _cache_write
+        account_key = ('account_snapshot_v1', account_id, base_ccy)
+        if ready:
+            _cache_write(account_key, account, 5 * 86400)
+        else:
+            previous = _cache_read(account_key)
+            if previous is not _MISS and recent(previous.get('as_of')):
+                account = {**previous, 'account_ready': False}
+            else:
+                account['net_liquidation'] = None
         if not contracts:
             account['daily_pnl'] = 0.0
             return {'positions': positions, 'market_data': {}, 'div_data': {},
@@ -376,23 +455,30 @@ class _IBKRConnection:
         # These four chains are independent — run them concurrently to cut
         # total fetch time from sum-of-latencies to max-of-latencies.
 
+        qualification = None
+
+        async def market_contracts():
+            nonlocal qualification
+            # Portfolio-cache contracts may have no exchange; both readers must await qualification.
+            if qualification is None:
+                qualification = asyncio.create_task(ib.qualifyContractsAsync(*contracts))
+            return [c for c in await qualification if c is not None and c.conId > 0]
+
         # Chain A: qualify + snapshot tickers for all positions
         async def _fetch_tickers():
             try:
-                await ib.qualifyContractsAsync(*contracts)
-                return await ib.reqTickersAsync(*contracts)
+                return await ib.reqTickersAsync(*await market_contracts())
             except Exception as e:
                 log.warning("Market data fetch failed: %s", e)
                 return []
 
-        # Chain B: dividend (59) + 52-week range (165) tick subscriptions.
+        # Chain B: dividends require generic tick 456 (received tick type 59).
         # Returns (div_dict, range_dict) so the caller can merge range into market_data.
         async def _fetch_dividends():
+            div_tickers = []
             try:
-                div_tickers = [
-                    ib.reqMktData(c, genericTickList='59,165', snapshot=False)
-                    for c in contracts
-                ]
+                for contract in await market_contracts():
+                    div_tickers.append(ib.reqMktData(contract, genericTickList='456,165', snapshot=False))
                 # Poll in 0.1 s steps up to 1.5 s; exit early once every ticker
                 # has received its 52-week range tick (tick 165).  Stocks with no
                 # 52w data from IBKR will always be NaN — we fall through the
@@ -417,20 +503,37 @@ class _IBKRConnection:
                     high = safe(t.high52week)
                     if low and high:
                         range_result[sym] = {'low_52w': low, 'high_52w': high}
-                    ib.cancelMktData(t.contract)
                 log.debug("Dividend data fetched for: %s", list(div_result.keys()))
                 log.debug("52w range fetched for: %s", list(range_result.keys()))
                 return div_result, range_result
             except Exception as e:
                 log.warning("Dividend data fetch failed: %s", e)
                 return {}, {}
+            finally:
+                for ticker in div_tickers:
+                    try:
+                        if ib.isConnected():
+                            ib.cancelMktData(ticker.contract)
+                    except Exception as e:
+                        log.debug('Dividend subscription cleanup failed: %s', e)
+
+        fx_quotes = {}
+
+        async def fx_quote(pair, timeout):
+            # ib_async has one mktData request slot per contract; share concurrent readers.
+            if pair not in fx_quotes:
+                job = self._fx_quotes.get(pair)
+                if job is None or job.done():
+                    job = self._fx_quotes[pair] = asyncio.create_task(_fx_ticker(ib, pair, timeout))
+                fx_quotes[pair] = job
+            return await fx_quotes[pair]
 
         # Chain C: EUR/USD display rate, separate from attribution rates.
         async def _fetch_fx():
             try:
-                eurusd = Forex('EURUSD')
-                await ib.qualifyContractsAsync(eurusd)
-                [fx_ticker] = await ib.reqTickersAsync(eurusd)
+                fx_ticker = await fx_quote('EURUSD', _FX_QUOTE_TIMEOUT)
+                if fx_ticker is None:
+                    return None
                 rate = fx_ticker.marketPrice()
                 if rate and rate > 0 and rate == rate:
                     log.debug("EUR/USD rate: %.6f", rate)
@@ -443,7 +546,8 @@ class _IBKRConnection:
         async def _fetch_daily_fx():
             """Fetch fresh spot and prior completed daily midpoint for each currency.
 
-            Try direct and inverse IDEALPRO contracts; failures yield no estimate.
+            Use EURUSD for EUR/USD conversion; other pairs try both orientations.
+            Each currency has a total budget; failures yield no estimate.
             The configured EURUSD display fallback never enters this path.
             """
             result = {}
@@ -453,13 +557,19 @@ class _IBKRConnection:
             today = datetime.now(ZoneInfo('America/New_York')).date()
 
             async def one_currency(currency):
-                for pair, inverted in ((currency + base_ccy, False),
-                                       (base_ccy + currency, True)):
+                deadline = asyncio.get_running_loop().time() + _FX_BUDGET
+                pairs = [(currency + base_ccy, False), (base_ccy + currency, True)]
+                if {currency, base_ccy} == {'EUR', 'USD'}:
+                    pairs = [('EURUSD', base_ccy == 'EUR')]
+                for pair, inverted in pairs:
                     try:
-                        contract = Forex(pair)
-                        if not await ib.qualifyContractsAsync(contract):
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            return
+                        ticker = await fx_quote(pair, min(_FX_QUOTE_TIMEOUT, remaining))
+                        if ticker is None:
                             continue
-                        [ticker] = await ib.reqTickersAsync(contract)
+                        contract = ticker.contract
                         # A delayed/frozen quote or an undated snapshot cannot
                         # establish today's translation effect.
                         if ticker.marketDataType != 1 or not fresh_quote_time(ticker.time):
@@ -467,15 +577,21 @@ class _IBKRConnection:
                         now_rate = ticker.marketPrice()
                         if not valid_positive(now_rate):
                             continue
+                        result[currency] = {
+                            'now': 1 / now_rate if inverted else now_rate,
+                            'as_of': ticker.time.isoformat(), 'source': 'IBKR FX quote'}
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            return
                         bars = await ib.reqHistoricalDataAsync(
                             contract, endDateTime='', durationStr='10 D',
                             barSizeSetting='1 day', whatToShow='MIDPOINT',
-                            useRTH=False, timeout=8,
+                            useRTH=False, timeout=remaining,
                         )
                         prev_rate = previous_daily_close(bars, today)
                         normalized = quote_to_base(now_rate, prev_rate, inverted=inverted)
                         if normalized:
-                            result[currency] = normalized
+                            result[currency].update(normalized)
                             return
                     except Exception as e:
                         log.debug('FX attribution quote %s unavailable: %s', pair, e)
@@ -483,11 +599,13 @@ class _IBKRConnection:
             await asyncio.gather(*(one_currency(ccy) for ccy in currencies))
             return result
 
-        # Chain E: recent trade executions (IBKR server caps history at ~7 days)
+        # Chain E: executions retained by TWS/Gateway (not lifetime history).
         async def _fetch_trades():
             try:
                 filt = ExecutionFilter()
-                filt.time = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d-%H:%M:%S')
+                filt.acctCode = account_id
+                # Request all executions the broker actually retains, not an assumed seven-day history.
+                filt.time = ''
                 fills = await ib.reqExecutionsAsync(filt)
                 result = []
                 for f in fills:
@@ -495,6 +613,8 @@ class _IBKRConnection:
                         shares = float(f.execution.shares)
                         price  = float(f.execution.price)
                         result.append({
+                            'account': f.execution.acctNumber, 'conId': f.contract.conId,
+                            'currency': f.contract.currency, 'exec_id': f.execution.execId,
                             'ticker': f.contract.symbol,
                             'side':   'BUY' if f.execution.side == 'BOT' else 'SELL',
                             'shares': shares,
@@ -509,7 +629,7 @@ class _IBKRConnection:
                 return result
             except Exception as e:
                 log.warning("Trade history fetch failed: %s", e)
-                return []
+                return None
 
         # Chain D: daily P&L
         async def _fetch_pnl():
@@ -529,10 +649,43 @@ class _IBKRConnection:
                 log.warning("Daily P&L fetch failed: %s", e)
                 return None
 
-        raw_tickers, (div_data, range_data), fx_rate, daily_fx_rates, daily_pnl, trades = await asyncio.gather(
-            _fetch_tickers(), _fetch_dividends(), _fetch_fx(), _fetch_daily_fx(),
-            _fetch_pnl(), _fetch_trades(),
-        )
+        signature = (account_id, tuple(sorted((p['conId'], p['quantity']) for p in positions)))
+
+        async def remember(name, fetch):
+            try:
+                value = await fetch()
+                if value is not None and not (name in ('quotes', 'daily_fx') and not value):
+                    self._extra_results[signature, name] = (datetime.now(timezone.utc).isoformat(), value)
+            except Exception as e:
+                log.debug('Optional broker data %s unavailable: %s', name, e)
+
+        for name, fetch in (('quotes', _fetch_tickers), ('dividends', _fetch_dividends),
+                            ('display_fx', _fetch_fx), ('daily_fx', _fetch_daily_fx),
+                            ('pnl', _fetch_pnl), ('trades', _fetch_trades)):
+            key = (signature, name)
+            task = self._extra_tasks.get(key)
+            stamp = self._extra_results.get(key, (None, None))[0]
+            old_enough = stamp is None or (datetime.now(timezone.utc) - datetime.fromisoformat(stamp)).total_seconds() >= 60
+            if task is None or (task.done() and old_enough):
+                self._extra_tasks[key] = asyncio.create_task(remember(name, fetch))
+        # Optional requests continue in the broker loop; initial holdings never wait for them.
+        await asyncio.wait([task for (key, _), task in self._extra_tasks.items() if key == signature], timeout=0.1)
+        for key, task in list(self._extra_tasks.items()):
+            if key[0] != signature and task.done():
+                self._extra_tasks.pop(key, None)
+                self._extra_results.pop(key, None)
+
+        def extra(name, default):
+            from backend.portfolio.valuation import recent
+            stamp, result = self._extra_results.get((signature, name), (None, default))
+            return result if recent(stamp) else default
+
+        raw_tickers = extra('quotes', [])
+        div_data, range_data = extra('dividends', ({}, {}))
+        fx_rate = extra('display_fx', None)
+        daily_fx_rates = extra('daily_fx', {})
+        daily_pnl = extra('pnl', None)
+        trades = extra('trades', [])
 
         # ── Assemble market_data from tickers ─────────────────────────────────
         market_data: dict = {}
@@ -567,10 +720,20 @@ class _IBKRConnection:
                 and t.marketDataType in (1, 3) and fresh_quote_time(t.time)
                 and valid_positive(t.marketPrice())
             )
-            p['price_unit_verified'] = bool(quote_valid)
+            # Account-update stock prices are per share, in the contract currency.
+            broker_price = p['current_price'] if p['multiplier'] == 1 and not p['price_stale'] else None
+            p['price_unit_verified'] = bool(quote_valid or valid_positive(broker_price))
             p['fx_price_stale'] = not quote_valid
-            p['fx_native_price'] = float(t.marketPrice()) if quote_valid else None
-            p['base_market_value'] = position_value_in_base(p, base_ccy, daily_fx_rates)
+            p['fx_native_price'] = float(t.marketPrice()) if quote_valid else broker_price
+            p['valuation_as_of'] = (t.time.isoformat() if quote_valid else
+                                     self._observed.get(('position', account_id, p['conId']), received))
+            p['valuation_source'] = 'IBKR quote' if quote_valid else 'IBKR account snapshot'
+            from backend.portfolio.valuation import recent
+            p['fx_price_stale'] = not recent(p['valuation_as_of'])
+        for ccy, rate in daily_fx_rates.items():
+            if ccy not in valuation_rates and rate.get('now'):
+                valuation_rates[ccy] = rate
+        value_positions(positions, account, valuation_rates)
 
         # Merge 52-week range from the generic-tick subscription (tick 165).
         # reqTickersAsync snapshots often don't carry low52week/high52week;
@@ -589,6 +752,10 @@ class _IBKRConnection:
         return {
             'positions':   positions,
             'market_data': market_data,
+            'executions_from': (datetime.now(ZoneInfo(os.environ.get('IBKR_REPORT_TIMEZONE') or 'UTC')).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat() if (os.environ.get('IBKR_REPORT_TIMEZONE') and (signature, 'trades') in self._extra_results and
+                 datetime.fromisoformat(self._extra_results[signature, 'trades'][0]).astimezone(ZoneInfo(os.environ.get('IBKR_REPORT_TIMEZONE') or 'UTC')).date() ==
+                 datetime.now(ZoneInfo(os.environ.get('IBKR_REPORT_TIMEZONE') or 'UTC')).date()) else None),
+            'valuation_rates': valuation_rates,
             'daily_fx_rates': daily_fx_rates,
             'div_data':    div_data if isinstance(div_data, dict) else {},
             'trades':      trades if isinstance(trades, list) else [],

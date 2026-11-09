@@ -2,7 +2,7 @@
 
 import unittest
 
-from backend.portfolio.positions import get_summary, portfolio_beta, process_positions
+from backend.portfolio.positions import get_summary, process_positions
 
 
 def mixed_currency_portfolio(base_values=None):
@@ -34,7 +34,7 @@ class TestMixedCurrencyWeights(unittest.TestCase):
 
     def test_2_unverified_mixed_currency_values_have_no_portfolio_beta(self):
         df = mixed_currency_portfolio()
-        self.assertEqual(portfolio_beta(df), (None, 0.0, 0))
+        self.assertIsNone(get_summary(df)['portfolio_beta'])
         self.assertIsNone(get_summary(df)['largest_position_pct'])
 
     def test_3_verified_base_values_produce_correct_mixed_currency_weights(self):
@@ -43,7 +43,7 @@ class TestMixedCurrencyWeights(unittest.TestCase):
 
         self.assertEqual(values['EUR_HOLDING'], 66.67)
         self.assertEqual(values['USD_HOLDING'], 33.33)
-        self.assertEqual(portfolio_beta(df), (1.33, 100.0, 2))
+        self.assertIsNone(get_summary(df)['portfolio_beta'])  # Historical analysis is separate.
 
 
 if __name__ == '__main__':

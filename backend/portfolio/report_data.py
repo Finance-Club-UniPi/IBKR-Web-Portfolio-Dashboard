@@ -83,12 +83,18 @@ def weekly_frame(value: pd.Series, bench: pd.Series | None, days: int = CHART_DA
     return compare_frame(window, others, 'pct')
 
 
-def fetch_performance(positions: list[dict], base_ccy: str):
+def fetch_performance(positions: list[dict], base_ccy: str, account=None):
     """(portfolio value series, S&P 500 series | None, [(ticker, reason left out)]), or None.
 
     The portfolio series is the dashboard's backcast (today's holdings valued at
     dividend-adjusted historical closes), so it is a like-for-like comparison, not an account ledger.
     """
+    if account and account.get('net_liquidation'):
+        from backend.portfolio.analysis import account_history
+        try:
+            return account_history({'positions': positions, 'account': account}, '1Y')
+        except ValueError:
+            return None
     slim = [{'ticker': p.get('ticker'), 'quantity': p.get('quantity'),
              'currency': p.get('currency') or '', 'multiplier': p.get('multiplier')}
             for p in positions]

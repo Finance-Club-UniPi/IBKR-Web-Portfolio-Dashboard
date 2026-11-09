@@ -25,6 +25,10 @@ from ui.styles import (
 
 
 def build_layout(refresh_ms: int) -> html.Div:
+    try:
+        uploaded = load_uploaded_trades()
+    except ValueError:
+        uploaded = []  # Display stays available; writes still reject unreadable persisted history.
     return html.Div([
 
         # Branded first-load intro; CSS hides it after the reveal animation.
@@ -169,7 +173,7 @@ def build_layout(refresh_ms: int) -> html.Div:
                 ], style={**CARD, 'flex': '1', 'alignSelf': 'flex-start'}),
 
                 html.Div([
-                    section_label("Allocation"),
+                    section_label("Gross position allocation"),
                     html.Div(id='donut-container', style={'flex': '1', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'flexDirection': 'column'}),
                 ], style={**CARD, 'width': '260px', 'display': 'flex', 'flexDirection': 'column'}),
             ], id='holdings-donut-row', style={'display': 'flex', 'gap': '14px'}),
@@ -223,7 +227,7 @@ def build_layout(refresh_ms: int) -> html.Div:
         dcc.Store(id='connection-status', data='loading'),
         dcc.Store(id='selected-ticker', data=None),
         dcc.Store(id='selected-period', data='1M'),
-        dcc.Store(id='uploaded-trades', data=load_uploaded_trades()),
+        dcc.Store(id='uploaded-trades', data=uploaded),
         dcc.Store(id='coach-open', data=False),
         dcc.Store(id='coach-mode', data='preset'),
         dcc.Store(id='coach-active-id', data=None),
@@ -242,6 +246,7 @@ def build_layout(refresh_ms: int) -> html.Div:
         dcc.Store(id='theme-mode', storage_type='local', data='light'),
         dcc.Store(id='demo-portfolio-id', data='balanced'),
         dcc.Store(id='page-nav', data='portfolio'),
+        dcc.Store(id='portfolio-analysis'),
 
     ], id='app-root', style={
         'fontFamily': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',

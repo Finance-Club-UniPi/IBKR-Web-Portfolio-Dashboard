@@ -67,7 +67,7 @@ def build_sector_geo(intel, port_data, status=''):
     acct          = port_data.get('account') or {}
     base_ccy      = acct.get('base_currency', 'EUR')
     sym           = ccy_symbol(base_ccy)
-    total_base = sum(p['base_market_value'] for p in positions)
+    total_base = sum(abs(p['base_market_value']) for p in positions)
     if total_base >= 1_000_000:
         center_val = f"{sym}{total_base/1_000_000:.2f}M"
     elif total_base >= 1_000:
@@ -174,7 +174,7 @@ def build_sector_geo(intel, port_data, status=''):
     }
 
     return html.Div([
-        section_label("Sector & Geography Exposure"),
+        section_label("Gross Sector & Geography Allocation"),
 
         # ── Two equal chart columns ───────────────────────────────────────────
         html.Div([
