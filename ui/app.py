@@ -10,6 +10,7 @@ import ui.callbacks.export as _export_mod
 import ui.callbacks.intel as _intel_mod
 import ui.callbacks.performance as _performance_mod
 import ui.callbacks.portfolio as _data_callbacks_mod
+import ui.callbacks.risk as _risk_mod
 import ui.callbacks.summary as _summary_mod
 import ui.callbacks.valuation as _valuation_mod
 import ui.health as health
@@ -24,6 +25,7 @@ app.layout = _layout_mod.build_layout(_REFRESH_MS)
 _data_callbacks_mod.register(app)
 _summary_mod.register(app)
 _performance_mod.register(app)
+_risk_mod.register(app)
 _export_mod.register(app)
 _detail_mod.register(app)
 _intel_mod.register(app)

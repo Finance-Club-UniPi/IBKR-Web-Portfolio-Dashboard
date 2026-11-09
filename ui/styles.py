@@ -37,6 +37,7 @@ COLOR_WARN_YELLOW    = '#eab308'               # yellow — mid-warn zone
 COLOR_WARN_BG        = '#fffbeb'               # pale amber — also used by export.py (keep as hex)
 COLOR_WARN_BORDER    = '#fde68a'               # amber border — also used by export.py (keep as hex)
 COLOR_WARN_DEEP      = '#92400e'               # deep amber — also used by export.py (keep as hex)
+COLOR_BAD_PLOT       = '#dc2626'               # Plotly traces need a literal colour.
 COLOR_BAD            = 'var(--clr-bad)'        # red — negative P&L, overvalued
 COLOR_BAD_DEEP       = '#991b1b'               # deep red — used by export.py (keep as hex)
 COLOR_BAD_BG         = 'var(--clr-bad-bg)'    # pale red panel background

@@ -55,6 +55,7 @@ Each installer creates a desktop shortcut so double-clicking starts the dashboar
 - **Allocation donut** + live EUR/USD rate from IBKR
 - **Market Valuation** — Buffett Indicator, S&P 500 P/E, Shiller CAPE (50-yr chart), 10-yr Treasury yield, colour-coded by zone
 - **Market Intelligence** — sector & geography exposure, earnings calendar with post-earnings moves
+- **Risk metrics** — separate Risk page with 1Y/3Y/5Y VaR, CVaR, volatility, Sharpe, Sortino, drawdown, beta/alpha, and distribution charts
 - **Dividends** — yield per position, projected 12-month income, payment schedule
 - **Historical trades** — upload IBKR Transaction History CSV per position; BUY/SELL markers overlaid on price chart
 - **Portfolio Coach** — chat panel with 6 rules-based scenarios out of the box; optionally paste an Anthropic / xAI / OpenAI key for free-form chat

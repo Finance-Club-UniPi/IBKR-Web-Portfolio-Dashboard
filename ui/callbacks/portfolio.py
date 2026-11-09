@@ -234,12 +234,16 @@ def register(app):
 
     @app.callback(
         Output('main-content-area', 'style'),
+        Output('risk-page', 'style'),
         Input('connection-status', 'data'),
+        Input('page-nav', 'data'),
     )
-    def toggle_main_content(status):
+    def toggle_main_content(status, page):
         if (status or '').split(':')[0] == 'disconnected':
-            return {'display': 'none'}
-        return {}
+            return {'display': 'none'}, {'display': 'none'}
+        if page == 'risk':
+            return {'display': 'none'}, {}
+        return {}, {'display': 'none'}
 
     @app.callback(
         Output('connection-status', 'data', allow_duplicate=True),

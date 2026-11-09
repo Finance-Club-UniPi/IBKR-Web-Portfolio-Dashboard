@@ -40,7 +40,8 @@ backend/
   portfolio/
     positions.py            Holding calculations, summary, beta, daily P&L choice
     fx.py                   Daily FX, FIFO lots, since-purchase FX, base valuation
-    history.py              Historical holdings backcast and comparison series
+    history.py              Historical holdings backcast, comparison series, and ECB €STR
+    risk.py                 Pure risk metrics, benchmark FX conversion, and risk-free averaging
     exposure.py             Shared sector/country aggregation
     fundamentals.py         Investment signal labels from fetched fundamentals
     report_data.py          PDF data and performance comparisons

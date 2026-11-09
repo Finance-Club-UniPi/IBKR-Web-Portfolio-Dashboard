@@ -12,12 +12,16 @@ price cache.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import math
+import urllib.request
 from datetime import date
 
 import pandas as pd
 
+from backend.network import fetch_with_retry
 from backend.providers.market_data import get_price_history
 from backend.storage.cache import cached_fetch
 
@@ -33,6 +37,9 @@ MAX_COMPARE = 5
 
 _TTL = 3600 * 4
 _SEARCH_TTL = 3600
+# ECB Data Portal: €STR volume-weighted trimmed mean, daily, % p.a.
+_ESTR_URL = ('https://data-api.ecb.europa.eu/service/data/EST/B.EU000A2X2A25.WT'
+             '?format=csvdata&startPeriod={start}')
 
 
 def custom_bounds(today: date | None = None) -> tuple[date, date]:
@@ -221,6 +228,24 @@ def get_compare_history(symbol: str, period: str, start=None, end=None) -> pd.Se
         return _series(clip_window(entry, start, end) if custom else entry)
     except Exception as e:
         log.debug('compare history %s unavailable: %s', symbol, e)
+        return None
+
+
+def get_estr_history() -> pd.Series | None:
+    """Daily €STR (euro short-term rate, % p.a.) from the ECB, covering the max lookback."""
+    def fetch():
+        start = custom_bounds()[0].isoformat()
+        req = urllib.request.Request(_ESTR_URL.format(start=start), headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            rows = [r for r in csv.DictReader(io.StringIO(resp.read().decode())) if r.get('OBS_VALUE')]
+        if len(rows) < 2:
+            raise LookupError('estr')
+        return {'dates': [r['TIME_PERIOD'] for r in rows], 'prices': [float(r['OBS_VALUE']) for r in rows]}
+
+    try:
+        return _series(cached_fetch(('estr',), _TTL, lambda: fetch_with_retry(fetch, retries=2)))
+    except Exception as e:
+        log.debug('ESTR history unavailable: %s', e)
         return None
 
 
