@@ -27,7 +27,9 @@ python -m pytest -q
 ```
 
 The tests use fixtures and mocked provider responses. They do not validate a
-live brokerage account. CI runs all three checks on Python 3.12.
+live brokerage account. CI runs all three checks on Python 3.12. Read
+[DATA_AND_FLEX.md](DATA_AND_FLEX.md) for current valuation, shared beta and
+automatic trade-history setup.
 
 ## Directory map
 
@@ -38,7 +40,9 @@ scripts/                    Optional Docker installers and launchers
 backend/
   portfolio_service.py      Fetch → enrich → calculate → return snapshot
   portfolio/
-    positions.py            Holding calculations, summary, beta, daily P&L choice
+    positions.py            Holding calculations, gross allocation, daily P&L choice
+    valuation.py            Current and compatible dated base-currency valuations
+    analysis.py             Shared signed account-equity beta, risk and scenarios
     fx.py                   Daily FX, FIFO lots, since-purchase FX, base valuation
     history.py              Historical holdings backcast, comparison series, and ECB €STR
     risk.py                 Pure risk metrics, benchmark FX conversion, and risk-free averaging
@@ -47,6 +51,7 @@ backend/
     report_data.py          PDF data and performance comparisons
   providers/
     ibkr.py                 Broker connection, retries, snapshot normalization
+    flex.py                 Background Flex reports and authoritative lot reconciliation
     demo.py                 Synthetic demo holdings and explicit demo FX lots
     market_data.py          Yahoo symbols, prices, fundamentals, sectors, earnings
     fx_history.py           Historical FX lookup and trade-lot orchestration
@@ -88,19 +93,22 @@ flowchart TD
     B --> C[backend/portfolio_service.fetch_portfolio]
     C --> D[IBKR snapshot or demo payload]
     D --> E[prepare_portfolio]
-    E --> F[Dividends, beta, and trade-lot FX]
+    E --> F[Collect completed valuation, dividend and lot-FX tasks]
     F --> G[process_positions and get_summary]
     G --> H[portfolio-data store]
     H --> I[UI components, Coach, and PDF]
+    H --> J[Background shared historical analysis]
+    J --> K[portfolio-analysis store: both beta cards and PDF]
 ```
 
 `fetch_portfolio()` returns `None` for no broker snapshot, `{}` for a connected
 account without positions, and a dictionary for a populated portfolio. The
 payload carries positions, summary, account, dividends, and broker trades.
 
-Enrichment has a two-second budget. Background tasks can finish and populate
-the cache after that budget. An unfinished task must not invent a numeric
-answer; in particular, missing trade-lot FX never enables an aggregate fallback.
+Optional broker/provider requests run in background tasks. The existing
+four-second poll collects results without waiting for Yahoo history or Flex.
+An unfinished task must not invent a numeric answer; missing trade-lot FX never
+enables an aggregate fallback. Current valuation needs no previous FX close.
 
 ## Where to change what
 
@@ -109,12 +117,12 @@ answer; in particular, missing trade-lot FX never enables an aggregate fallback.
 | Since-purchase FX formula | `backend/portfolio/fx.py:total_fx_from_trades` | `tests/test_fx_trade_lot_precedence.py`, `tests/test_fx_impact.py` |
 | Missing/slow FX task | `backend/portfolio_service.py:prepare_portfolio` | `tests/test_architecture.py` |
 | Broker fields or quotes | `backend/providers/ibkr.py` | Live TWS validation as well as unit tests |
-| Weights, summary, beta | `backend/portfolio/positions.py` | `tests/test_mixed_currency_weights.py`, `tests/test_beta_totals.py` |
+| Valuation, exposure, beta | `backend/portfolio/valuation.py`, `analysis.py`, `positions.py` | `tests/test_account_analysis.py`, `tests/test_risk_page.py` |
 | Sector/geography calculation | `backend/portfolio/exposure.py` | `tests/test_audit_regressions.py`, `tests/test_architecture.py` |
 | Card/table text or formatting | `ui/components/summary.py` | UI regression tests |
 | Click, sort, upload behavior | `ui/callbacks/detail.py` | `tests/test_audit_regressions.py`, `tests/test_trade_storage.py` |
 | Position detail appearance | `ui/components/position.py` | App and component checks |
-| Historical performance | `backend/portfolio/history.py`, `ui/callbacks/performance.py` | `tests/test_performance.py` |
+| Historical performance | `backend/portfolio/analysis.py`, `history.py`, `ui/callbacks/performance.py` | `tests/test_performance.py` |
 | Macro sources or thresholds | `backend/providers/valuation.py` | `tests/test_audit_regressions.py`, smoke checks |
 | Preset Coach calculations | `backend/coaching/scenarios.py` | Test returned answer data before testing rendering |
 | Coach appearance | `ui/components/scenarios.py`, `chat.py`, `coach_panel.py` | `tests/test_coach.py`, `tests/test_news.py` |
@@ -122,27 +130,35 @@ answer; in particular, missing trade-lot FX never enables an aggregate fallback.
 | PDF content/layout | `ui/reports/pdf.py:build_pdf` | `tests/test_pdf_report.py`, PDF regression checks |
 | CSS, colors, branding | `ui/assets/custom.css`, `ui/styles.py` | App asset checks and browser inspection |
 | CSV or persistence | `backend/storage/trades.py` | `tests/test_trade_storage.py` |
+| Automatic broker history | `backend/providers/flex.py` | `tests/test_flex_history.py` |
 
 ## Calculation conventions and unavailable data
 
 - **Units:** raw TWS position value/P&L remains labelled “TWS units.” Holding
   weights use separately verified native share prices, contract multipliers,
-  and fresh account-currency FX. A display fallback rate never establishes
-  verified weights. Missing verification suppresses affected charts and beta.
-- **Since-purchase FX:** sum each open FIFO lot's `quantity × multiplier ×
+  and current account-currency FX. Compatible dated values are accepted up to
+  five days with a source/date; a configured display rate never verifies a value.
+  Missing verification suppresses affected charts and beta.
+- **Since-purchase FX:** sum each reconciled open lot's signed `quantity × multiplier ×
   current native price × (FX now − purchase-date FX)`. Daily closing purchase
-  rates make this an estimate. Incomplete history shows unavailable. The
+  rates make this an estimate; reported opening-trade FX takes priority.
+  Authoritative Flex lots and execution coverage are required; a matching
+  quantity alone does not establish complete history. Unreconciled history
+  suppresses this estimate only. The
   price/FX interaction is assigned to FX. Demo estimates use explicit synthetic
   opening lots, not the removed average-cost formula.
 - **Daily P&L:** zero is a valid broker result. Only `None` permits a calculated
   fallback, and that fallback requires verified account-base units.
-- **Beta:** partial coverage is reported for long portfolios. Aggregate beta is
-  unavailable if the portfolio contains a short position.
+- **Beta:** one historical result supplies both pages and the PDF. Signed
+  current stock/ETF values divided by positive account equity weight returns;
+  foreign cash contributes FX returns. Shorts and leverage are retained. At
+  least 30 common daily returns are required; the shared window is 1Y/3Y/5Y.
 - **Exposure:** sector weights are fractions. Missing ETF sector coverage is
   assigned to Unknown. UI, Coach, and PDF use the same aggregation.
-- **Performance:** today's quantities are held constant over dividend-adjusted
-  historical prices and daily FX. This is a total-return backcast, not an
-  account ledger; cash and actual past trades are excluded.
+- **Performance:** fixed current signed exposures produce account-equity
+  scenarios from dividend-adjusted historical prices and daily FX, including
+  foreign cash. This is not an account ledger; past trading, borrowing,
+  financing and transaction costs are excluded.
 - **Buffett ratio:** matched annual observations from World Bank
   [listed domestic market capitalization in current USD](https://data.worldbank.org/indicator/CM.MKT.LCAP.CD)
   and [GDP in current USD](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD).

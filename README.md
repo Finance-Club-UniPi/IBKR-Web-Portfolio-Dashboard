@@ -68,26 +68,25 @@ native price × (FX now − previous FX daily close)`. Both FX rates are express
 as account-base units per unit of the instrument currency. The current price
 allocates the price/FX cross-term to FX. This is a daily estimate, not IBKR's
 P&L reset or a since-purchase attribution. The separate **FX total** column
-uses open FIFO trade lots and purchase-date FX closes; it stays unavailable
+uses reconciled open lots and opening-trade FX, or purchase-date daily FX closes;
+it stays unavailable
 when the required history, quote, or rates are missing.
 
 The live path uses the TWS/`ib_async` portfolio contract currency and supports
-stock/ETF (`STK`) price units. It uses a fresh native-currency quote for the
-same qualified contract, rather than trusting the units of the portfolio's
-`marketPrice` field. It requires a fresh real-time position snapshot,
-a fresh real-time IDEALPRO FX quote, and a prior completed daily FX midpoint
-bar. A direct or inverse currency pair is accepted. Same-currency positions
-show zero. Missing, delayed, stale, or unsupported inputs show an em dash with
-the reason on hover. The configured EURUSD fallback is only for the older
-display conversion and is never used for this attribution.
-Weekend and daily FX rollover snapshots are treated as unavailable.
+stock/ETF (`STK`) price units. Current valuation uses the native per-share
+account snapshot or qualified quote and account `ExchangeRate`. It does not
+wait for yesterday's FX, purchase history or Yahoo history. Compatible dated
+values are accepted for up to five calendar days, with source/date shown.
+Daily attribution separately needs the prior completed daily FX close; Yahoo
+can supply that close off-thread. Same-currency positions show zero. Missing,
+expired or unsupported inputs show an em dash with the reason on hover. The
+configured EURUSD display fallback never establishes verified attribution FX.
 
-There is no verified live multicurrency TWS fixture in this checkout. In
-particular, TWS `PortfolioItem` does not carry an explicit currency for its
-market-value/P&L fields, and the TWS display may be configured to show native
-or base values. Live raw value/P&L labels therefore say “TWS units”; demo
-values are explicitly EUR. Validate a live account's TWS value units before
-using raw value/P&L totals as base-currency amounts.
+A read-only local account check verified native snapshot prices and valued all
+three stock/ETF holdings; this is not certification of every broker field or
+instrument type. Raw value/P&L labels remain “TWS units”; allocation and risk
+use separately verified base values. See [the audit](REPO_AUDIT.md) for evidence
+and remaining limits.
 
 IBKR references: [TWS Portfolio Values](https://www.ibkrguides.com/traderworkstation/portfolio-values.htm),
 [TWS API PortfolioValue](https://www.interactivebrokers.com/docs/tws-api/protobuf/portfolio-value),
@@ -142,3 +141,5 @@ All settings can be set via `config.yaml` **or** environment variables (env wins
 ## License
 
 MIT
+
+Data conventions, shared account-equity beta, short positions, and automatic IBKR history: [setup and limits](docs/DATA_AND_FLEX.md).
