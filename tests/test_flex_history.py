@@ -212,10 +212,12 @@ def test_live_fill_never_changes_a_flex_value(history_file):
 def test_live_fill_adds_only_keys_a_flex_record_lacks(history_file):
     trade = flex.parse_report(xml(), 'UTC')[0]['trades'][0]
     trade.pop('commission', None)
-    flex.save_history('TEST', [trade])
-    flex.save_history('TEST', [_live(trade, commission=1.0)])
+    flex.save_history('TEST', [{**trade, 'commission_currency': None}])
+    # Missing and None-held Flex fields are filled; a None in the fill never erases a Flex value.
+    flex.save_history('TEST', [_live(trade, commission=1.0, commission_currency='EUR', fx_rate=None)])
     saved = _saved()
-    assert (saved['commission'], saved['fx_rate'], saved['transaction_id']) == (1.0, .8, '123')
+    assert (saved['commission'], saved['commission_currency'], saved['fx_rate'], saved['transaction_id']) == \
+        (1.0, 'EUR', .8, '123')
 
 
 def test_none_valued_field_does_not_erase_known_value(history_file):

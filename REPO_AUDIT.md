@@ -103,7 +103,7 @@ Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only;
 
 ## Validation and limits
 
-- **Checks:** 211 tests pass, with 2 existing Dash deprecation warnings; Ruff and smoke checks pass.
+- **Checks (at `b0d559d`):** 211 tests pass, with 2 existing Dash deprecation warnings; Ruff and smoke checks pass.
 - **Evidence:** Temporary assertion-based diagnostics reproduced the data-loss, PDF, currency, lookup, refresh and shell-script cases above. They used synthetic data, temporary history files and mocked providers; no user trade history was changed. Workflow publishing was checked from configuration.
 - **Coverage:** Entry point, configuration, broker/valuation/risk flows, Flex and CSV persistence, background jobs, AI request/key handling, relevant UI/PDF consumers, build context, launchers, CI and tests. Long fundamentals/narrative renderers and styling were sampled.
 - **Known limits:** Analysis uses current exposures and cash, not actual historical trading. Newer listings can shorten 3Y/5Y to the same shared history; that is documented behavior, not a duplicated beta calculation.
