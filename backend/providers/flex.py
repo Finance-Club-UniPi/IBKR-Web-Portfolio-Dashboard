@@ -72,6 +72,19 @@ def save_history(account, trades=(), lots=None, report_end=None, coverage=None):
         merged = {t['exec_id']: t for t in old['trades']}
         for trade in trades:
             if trade.get('exec_id') and trade.get('account') == account:
+                # A Flex row replaces the record. A live fill never changes a stored Flex value and only
+                # fills keys it lacks; over a live record it overwrites (None = not supplied, 0/False are real).
+                stored = merged.get(trade['exec_id'], {})
+                live = {k: v for k, v in trade.items() if v is not None}
+                if trade.get('source') == 'flex':
+                    record = trade
+                elif stored.get('source') == 'flex':
+                    record = {**live, **{k: v for k, v in stored.items() if v is not None}}
+                else:
+                    record = {**stored, **live}
+                if not record.get('time'):
+                    log.warning('Skipping execution %s: no timestamp', trade['exec_id'])
+                    continue
                 voided = {t.get('correction_of') or t.get('transaction_id') for t in merged.values() if t.get('cancelled')}
                 if not trade.get('cancelled') and trade.get('transaction_id') and trade['transaction_id'] in voided:
                     continue
@@ -86,12 +99,6 @@ def save_history(account, trades=(), lots=None, report_end=None, coverage=None):
                     if corrected or revision:
                         merged.pop(identity)
                 else:
-                    # A Flex row is authoritative and replaces the record; a live fill only fills in
-                    # what it knows (None = not supplied, 0 and False are real values).
-                    record = trade if trade.get('source') == 'flex' else {
-                        **merged.get(trade['exec_id'], {}), **{k: v for k, v in trade.items() if v is not None}}
-                    if not record.get('time'):
-                        raise ValueError('Execution has no timestamp; existing history retained')
                     merged[trade['exec_id']] = record
         old['trades'] = sorted(merged.values(), key=lambda t: t['time'])
         if lots is not None and (not old.get('report_end') or report_end >= old['report_end']):

@@ -5,7 +5,7 @@ What this repo does: A private dashboard that reads an IBKR portfolio, calculate
 Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only; previous reports remain in Git.
 **Recent** means introduced or exposed by the latest portfolio changes. **Earlier** means the problem existed before those changes. Finding numbers replace the old audit IDs.
 
-**Update, 11 November 2026 (`fix/audit-batch-a`):** findings 1–4 are fixed and removed from the list below; the remaining numbers are unchanged. 1: a Flex record replaces the stored execution whole, a live fill only adds the fields it carries, and a fill without a timestamp is rejected. 2: the position button deletes only uploaded trades that no other held position also shows, and reports how many shared trades it kept. 3: the PDF shows Total Return as unavailable when the backend has no verified value. 4: PDF performance uses the shared account-equity calculation only; the holdings-only fallback is deleted. Each fix has a regression test that fails when the fix is reverted (checked by mutation). 231 tests pass; Ruff and smoke checks pass.
+**Update, 11 November 2026 (`fix/audit-batch-a`):** findings 1–4 are fixed and removed from the list below; the remaining numbers are unchanged. 1: a Flex record replaces the stored execution whole, a live fill only adds the fields it carries, and a fill without a timestamp is rejected. 2: the position button deletes only uploaded trades that no other held position also shows, and reports how many shared trades it kept. 3: the PDF shows Total Return as unavailable when the backend has no verified value. 4: PDF performance uses the shared account-equity calculation only; the holdings-only fallback is deleted. Review follow-ups on the same branch: a live fill never changes a stored Flex value and only fills missing fields; a fill without a timestamp is skipped and logged instead of rejecting the batch; a separate, confirmed "Delete ALL uploaded trades" button clears the store without parsing it (recovery from a corrupt file); per-position deletes keep the one-time v1 backup; write errors show a fixed message instead of a file path. Each fix has a regression test that fails when the fix is reverted (checked by mutation). 237 tests pass; Ruff and smoke checks pass. Finding 17 was fixed in review; 16, 18 and 19 are new.
 
 ## Must fix
 
@@ -83,11 +83,17 @@ Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only;
     - **Fix:** Decide on one convention (base currency is the like-for-like comparison for an account-equity return), apply it to both, and label the currency.
     - **If we skip it:** The PDF's "Difference (pp)" contradicts the page.
 
-17. **Per-position delete skips the v1 backup** — Recent; [trades.py:199](backend/storage/trades.py#L199)
-    - **What this is:** Rewriting the uploaded-trades store after a per-position delete.
-    - **Problem:** On an old v1 store (a plain list), the delete rewrites the file as v2 without the `.v1-backup` copy that saving makes. No trades are lost.
-    - **Fix:** Reuse the save path's backup step before the rewrite.
-    - **If we skip it:** The one-time v1 safety copy is missing for users whose first write after upgrading is a delete.
+18. **A live fill can restore an execution that Flex voided or corrected** — Earlier; [flex.py:74](backend/providers/flex.py#L74)
+    - **What this is:** The cancellation and correction checks in the broker-history merge.
+    - **Problem:** The checks key on `transaction_id` / `correction_of`, which live fills never carry. Flex execution E (transaction 123), then a Flex correction with its own execution ID and `correction_of=123` removes E; a later live fill of E adds it back beside the correction. A cancellation row with its own execution ID behaves the same. Reproduced with synthetic data; whether real IBKR corrections reuse or replace execution IDs has not been checked.
+    - **Fix:** First confirm IBKR's execution-ID scheme for corrections and cancellations. If they get new IDs, remember voided execution IDs and skip live fills for them.
+    - **If we skip it:** A corrected trade can be counted twice in lots and currency attribution.
+
+19. **Total Return is never available** — Recent (exposed by fixing the old finding 3); [positions.py:176](backend/portfolio/positions.py#L176)
+    - **What this is:** The portfolio's Total Return on the page and in the PDF.
+    - **Problem:** The backend always sets `total_pnl_pct=None`, and the PDF no longer rebuilds it from mixed-currency P&L, so it always shows "—".
+    - **Fix:** Compute it in the backend from verified base-currency cost and value; leave it unavailable when any holding lacks them.
+    - **If we skip it:** The headline return figure is permanently blank.
 
 ## Validation and limits
 

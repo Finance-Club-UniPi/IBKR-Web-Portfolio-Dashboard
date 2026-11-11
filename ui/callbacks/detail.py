@@ -10,6 +10,7 @@ from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 from backend.providers.market_data import get_etf_brief_data, get_stock_fundamentals
 from backend.schemas import PortfolioData
 from backend.storage.trades import (
+    clear_uploaded_trades,
     delete_uploaded_trades,
     parse_activity_csv,
     save_uploaded_trades,
@@ -40,6 +41,7 @@ from ui.styles import (
 )
 
 log = logging.getLogger(__name__)
+_WRITE_FAILED = 'Could not write trade history; see the app log'
 
 _LINK_STYLE = LINK_PILL
 _PERIOD_CHOICES = ['1M', '3M', '1Y', '3Y', '5Y']
@@ -216,6 +218,20 @@ def register(app):
                 'fontFamily': 'inherit',
             },
         )
+        clear_all_btn = dcc.ConfirmDialogProvider(
+            id={'type': 'position-clear-all-trades', 'index': 0},
+            message='Delete ALL uploaded trades for EVERY holding? This cannot be undone.',
+            children=html.Button(
+                "Delete ALL uploaded trades (every holding)",
+                style={
+                    'background': COLOR_BAD, 'color': COLOR_SURFACE_WHITE,
+                    'border': f'1px solid {COLOR_BAD}', 'borderRadius': '6px',
+                    'padding': '5px 12px', 'fontSize': '13px',
+                    'cursor': 'pointer', 'fontWeight': '500',
+                    'fontFamily': 'inherit',
+                },
+            ),
+        )
         upload_help = html.Details([
             html.Summary("How to export from IBKR ▸", style={
                 'cursor': 'pointer', 'color': COLOR_BRAND, 'fontSize': '13px',
@@ -229,7 +245,7 @@ def register(app):
             ], style={'fontSize': '13px', 'color': COLOR_TEXT, 'lineHeight': '1.7',
                       'fontWeight': '500',
                       'paddingLeft': '20px', 'margin': '6px 0 8px'}),
-            html.Div([upload_btn, delete_btn],
+            html.Div([upload_btn, delete_btn, clear_all_btn],
                      style={'display': 'flex', 'gap': '8px', 'alignItems': 'center',
                             'marginBottom': '4px'}),
         ])
@@ -348,8 +364,11 @@ def register(app):
 
         try:
             merged = save_uploaded_trades(parsed)
-        except (ValueError, OSError) as e:
+        except ValueError as e:
             return no_update, _broadcast(str(e), COLOR_BAD, contents_list)
+        except OSError:
+            log.exception('Could not write uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, contents_list)
         return merged, _broadcast(f"{len(parsed)} parsed · {len(merged)} total stored", COLOR_GOOD, contents_list)
 
     @app.callback(
@@ -386,9 +405,29 @@ def register(app):
 
         try:
             remaining = delete_uploaded_trades(match)
-        except (ValueError, OSError) as e:
+        except ValueError as e:
             return no_update, _broadcast(str(e), COLOR_BAD, n_clicks_list)
+        except OSError:
+            log.exception('Could not write uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, n_clicks_list)
         msg = f"Deleted {deleted} uploaded trade{'s' * (deleted != 1)}"
         if kept:
             msg += f"; kept {kept} shared with another holding"
         return remaining, _broadcast(msg, COLOR_WARN, n_clicks_list)
+
+    @app.callback(
+        Output('uploaded-trades', 'data', allow_duplicate=True),
+        Output({'type': 'position-upload-status', 'index': ALL}, 'children', allow_duplicate=True),
+        Input({'type': 'position-clear-all-trades', 'index': ALL}, 'submit_n_clicks'),
+        State({'type': 'position-upload-status', 'index': ALL}, 'children'),
+        prevent_initial_call=True,
+    )
+    def handle_clear_all_trades(submit_list, status_list):
+        if not any(submit_list or []):
+            return no_update, [no_update for _ in (status_list or [])]
+        try:
+            clear_uploaded_trades()
+        except OSError:
+            log.exception('Could not delete uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, status_list)
+        return [], _broadcast("All uploaded trades deleted (every holding)", COLOR_WARN, status_list)

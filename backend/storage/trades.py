@@ -169,6 +169,13 @@ def load_uploaded_trades() -> list:
         raise ValueError('Saved trade history could not be read; upload aborted') from e
 
 
+def _backup_v1_store():
+    """Keep the first copy of a legacy bare-list store before it is rewritten as v2."""
+    if os.path.exists(_STORE_PATH) and isinstance(json.loads(Path(_STORE_PATH).read_text()), list) \
+            and not os.path.exists(_STORE_PATH + '.v1-backup'):
+        shutil.copy2(_STORE_PATH, _STORE_PATH + '.v1-backup')
+
+
 def save_uploaded_trades(new_trades: list) -> list:
     """Merge `new_trades` into the persisted list, dedupe, and return the full list."""
     with _WRITE_LOCK:
@@ -183,8 +190,7 @@ def save_uploaded_trades(new_trades: list) -> list:
             if incoming[key] > counts[key] and (not trade.get('exec_id') or incoming[key] == 1):
                 existing.append(trade)
         existing.sort(key=lambda x: x.get('time') or '')
-        if os.path.exists(_STORE_PATH) and isinstance(json.loads(Path(_STORE_PATH).read_text()), list) and not os.path.exists(_STORE_PATH + '.v1-backup'):
-            shutil.copy2(_STORE_PATH, _STORE_PATH + '.v1-backup')
+        _backup_v1_store()
         atomic_json(_STORE_PATH, {'schema_version': 2, 'trades': existing})
         return existing
 
@@ -205,8 +211,18 @@ def delete_uploaded_trades(match) -> list:
         if not os.path.exists(_STORE_PATH):
             return []
         kept = [t for t in load_uploaded_trades() if not match(t)]
+        _backup_v1_store()
         atomic_json(_STORE_PATH, {'schema_version': 2, 'trades': kept})
         return kept
+
+
+def clear_uploaded_trades():
+    """Delete the whole store (every holding) without parsing it, so a corrupt file can be cleared too.
+
+    No backup is kept: a corrupt store has nothing worth saving, and the UI confirms first.
+    """
+    with _WRITE_LOCK:
+        Path(_STORE_PATH).unlink(missing_ok=True)
 
 
 def atomic_json(path, data):

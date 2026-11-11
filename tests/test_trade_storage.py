@@ -169,5 +169,97 @@ def test_delete_removes_account_less_trade_when_only_one_holding_shows_it(store)
     assert 'Deleted 1' in status[0].children and 'kept' not in status[0].children
 
 
-def test_clear_uploaded_trades_is_gone():
-    assert not hasattr(trades, 'clear_uploaded_trades')
+def _call(name, prop_id, value, *args):
+    """Run a registered detail callback with Dash's triggered context set."""
+    from dash._callback_context import context_value
+    from dash._utils import AttributeDict
+
+    import ui.callbacks.detail as detail
+
+    class App:
+        def clientside_callback(self, *a, **k):
+            pass
+
+        def callback(self, *a, **k):
+            def register(fn):
+                self.fns = {**getattr(self, 'fns', {}), fn.__name__: fn}
+                return fn
+            return register
+
+    app = App()
+    detail.register(app)
+    context_value.set(AttributeDict(triggered_inputs=[{'prop_id': prop_id, 'value': value}], inputs_list=[]))
+    return app.fns[name]
+
+
+CLEAR_ID = '{"index":0,"type":"position-clear-all-trades"}.submit_n_clicks'
+
+
+def test_clear_removes_a_corrupt_store_and_uploads_work_again(store):
+    store.write_text('{broken')
+    with pytest.raises(ValueError):
+        trades.save_uploaded_trades([fill('A')])
+    trades.clear_uploaded_trades()
+    assert not store.exists() and trades.load_uploaded_trades() == []
+    assert len(trades.save_uploaded_trades([fill('A')])) == 1
+
+
+def test_clear_callback_needs_the_confirm_and_per_position_delete_never_clears(store, monkeypatch):
+    from dash import no_update
+
+    import ui.callbacks.detail as detail
+    trades.save_uploaded_trades([_held(1, 'U1', 'X'), _held(2, 'U1', 'Y')])
+    clear = _call('handle_clear_all_trades', CLEAR_ID, 0)
+    assert clear([0], [0])[0] is no_update and clear([None], [0])[0] is no_update
+    assert len(trades.load_uploaded_trades()) == 2
+    calls = []
+    monkeypatch.setattr(detail, 'clear_uploaded_trades', lambda: calls.append(1), raising=False)
+    _delete_for('X', _book())
+    assert calls == [] and len(trades.load_uploaded_trades()) == 1
+    monkeypatch.setattr(detail, 'clear_uploaded_trades', trades.clear_uploaded_trades)
+    remaining, status = _call('handle_clear_all_trades', CLEAR_ID, 1)([1], [0])
+    assert remaining == [] and not store.exists() and 'All uploaded trades deleted' in status[0].children
+
+
+def test_delete_on_legacy_store_takes_the_v1_backup(store):
+    original = json.dumps([_held(1, 'U1', 'X'), _held(2, 'U1', 'Y')])
+    store.write_text(original)
+    _delete_for('X', _book())
+    assert (store.parent / 'uploaded_trades.json.v1-backup').read_text() == original
+
+
+def test_os_errors_show_a_fixed_message_without_the_path(store, monkeypatch):
+    import ui.callbacks.detail as detail
+    trades.save_uploaded_trades([_held(1, 'U1', 'X')])
+
+    def boom(*a, **k):
+        raise PermissionError('/secret/path')
+    monkeypatch.setattr(trades, 'atomic_json', boom)
+    _, status = _delete_for('X', _book())
+    assert 'Could not write trade history' in status[0].children and '/secret/path' not in status[0].children
+    monkeypatch.setattr(detail, 'parse_activity_csv', lambda _: [fill('A')])
+    prop = '{"index":0,"type":"position-trade-upload"}.contents'
+    _, status = _call('handle_position_trade_upload', prop, 'x')(['data:text/csv;base64,eA=='], ['a.csv'])
+    assert 'Could not write trade history' in status[0].children and '/secret/path' not in status[0].children
+
+
+def test_rendered_delete_button_id_is_the_position_id_and_works(store, monkeypatch):
+    from dash import html
+
+    import ui.callbacks.detail as detail
+    monkeypatch.setattr(detail, 'get_etf_brief_data', lambda t: None)
+    monkeypatch.setattr(detail, 'get_stock_fundamentals', lambda t: {})
+    monkeypatch.setattr(detail, '_build_fundamentals_section', lambda *a, **k: html.Div())
+    monkeypatch.setattr(detail, '_build_price_sparkline', lambda *a, **k: html.Div())
+    trades.save_uploaded_trades([_held(1, 'U1', 'X'), _held(2, 'U1', 'Y')])
+    book = {'positions': [{'position_id': 'X-U1', 'ticker': 'X', 'conId': 1, 'account': 'U1',
+                           'current_price': 10, 'currency': 'USD', 'quantity': 1},
+                          {'position_id': 'Y-U1', 'ticker': 'Y', 'conId': 2, 'account': 'U1',
+                           'current_price': 10, 'currency': 'USD', 'quantity': 1}]}
+    show = _call('show_position_detail', 'x.y', 1)
+    panel = show('X-U1', '1M', trades.load_uploaded_trades(), book, 'grid')
+    ids = [n.id for n in panel._traverse() if isinstance(getattr(n, 'id', None), dict)
+           and n.id.get('type') == 'position-delete-trades']
+    assert [i['index'] for i in ids] == ['X-U1']
+    remaining, _ = _delete_for(ids[0]['index'], book)
+    assert [t['ticker'] for t in remaining] == ['Y']
