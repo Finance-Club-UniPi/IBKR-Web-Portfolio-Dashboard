@@ -181,15 +181,6 @@ def _saved(exec_id='a.b.1.01'):
     return next(t for t in flex.read_history()['accounts']['TEST']['trades'] if t['exec_id'] == exec_id)
 
 
-def test_live_fill_keeps_flex_only_fields(history_file):
-    trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'commission': 1.5, 'commission_currency': 'USD'}
-    flex.save_history('TEST', [trade])
-    flex.save_history('TEST', [_live(trade)])
-    saved = _saved()
-    assert (saved['fx_rate'], saved['transaction_id'], saved['commission'], saved['commission_currency']) == (.8, '123', 1.5, 'USD')
-    assert saved['source'] == 'flex'
-
-
 def test_later_flex_import_wins_after_live_fill(history_file):
     trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'commission': 1.5}
     flex.save_history('TEST', [trade])
@@ -199,12 +190,14 @@ def test_later_flex_import_wins_after_live_fill(history_file):
     assert (saved['fx_rate'], saved['commission'], saved['transaction_id']) == (.9, 2.0, '456')
 
 
-def test_live_fill_updates_a_live_stored_record(history_file):
+def test_live_fill_updates_a_live_stored_record_and_keeps_fields_it_lacks(history_file):
     live = _live({**flex.parse_report(xml(), 'UTC')[0]['trades'][0]}, commission=1.5)
     flex.save_history('TEST', [live])
-    flex.save_history('TEST', [{**live, 'price': 101, 'commission': 0}])
+    flex.save_history('TEST', [_live(live, price=101)])
     saved = _saved()
-    assert saved['price'] == 101 and saved['commission'] == 0
+    assert saved['price'] == 101 and saved['commission'] == 1.5
+    flex.save_history('TEST', [{**live, 'commission': 0}])
+    assert _saved()['commission'] == 0
 
 
 def test_live_fill_never_changes_a_flex_value(history_file):
@@ -226,10 +219,10 @@ def test_live_fill_adds_only_keys_a_flex_record_lacks(history_file):
 
 
 def test_none_valued_field_does_not_erase_known_value(history_file):
-    trade = flex.parse_report(xml(), 'UTC')[0]['trades'][0]
-    flex.save_history('TEST', [trade])
-    flex.save_history('TEST', [{**_live(trade), 'fx_rate': None}])
-    assert _saved()['fx_rate'] == .8
+    live = _live(flex.parse_report(xml(), 'UTC')[0]['trades'][0], commission=1.5)
+    flex.save_history('TEST', [live])
+    flex.save_history('TEST', [{**live, 'commission': None}])
+    assert _saved()['commission'] == 1.5
 
 
 def test_flex_re_report_replaces_the_stored_record_whole(history_file):

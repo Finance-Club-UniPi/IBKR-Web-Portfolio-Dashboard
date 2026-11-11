@@ -76,31 +76,6 @@ def test_invalid_incoming_trade_retains_previous_file(store):
     assert store.read_bytes() == before
 
 
-def _delete_for(position_id, portfolio, n_clicks=1):
-    """Fire the real delete callback the way Dash does: pattern-matched button + triggered_id."""
-    from dash._callback_context import context_value
-    from dash._utils import AttributeDict
-
-    import ui.callbacks.detail as detail
-
-    class App:
-        def clientside_callback(self, *a, **k):
-            pass
-
-        def callback(self, *a, **k):
-            def register(fn):
-                self.fns = {**getattr(self, 'fns', {}), fn.__name__: fn}
-                return fn
-            return register
-
-    app = App()
-    detail.register(app)
-    prop = f'{{"index":"{position_id}","type":"position-delete-trades"}}.n_clicks'
-    context_value.set(AttributeDict(triggered_inputs=[{'prop_id': prop, 'value': n_clicks}],
-                                    inputs_list=[]))
-    return app.fns['handle_delete_trades']([n_clicks], portfolio)
-
-
 def _book():
     return {'positions': [
         {'position_id': 'X', 'ticker': 'X', 'conId': 1, 'account': 'U1'},
@@ -192,6 +167,12 @@ def _call(name, prop_id, value, *args):
     return app.fns[name]
 
 
+def _delete_for(position_id, portfolio, n_clicks=1):
+    """Fire the real delete callback the way Dash does: pattern-matched button + triggered_id."""
+    prop = f'{{"index":"{position_id}","type":"position-delete-trades"}}.n_clicks'
+    return _call('handle_delete_trades', prop, n_clicks)([n_clicks], portfolio)
+
+
 CLEAR_ID = '{"index":0,"type":"position-clear-all-trades"}.submit_n_clicks'
 
 
@@ -213,7 +194,7 @@ def test_clear_callback_needs_the_confirm_and_per_position_delete_never_clears(s
     assert clear([0], [0])[0] is no_update and clear([None], [0])[0] is no_update
     assert len(trades.load_uploaded_trades()) == 2
     calls = []
-    monkeypatch.setattr(detail, 'clear_uploaded_trades', lambda: calls.append(1), raising=False)
+    monkeypatch.setattr(detail, 'clear_uploaded_trades', lambda: calls.append(1))
     _delete_for('X', _book())
     assert calls == [] and len(trades.load_uploaded_trades()) == 1
     monkeypatch.setattr(detail, 'clear_uploaded_trades', trades.clear_uploaded_trades)
