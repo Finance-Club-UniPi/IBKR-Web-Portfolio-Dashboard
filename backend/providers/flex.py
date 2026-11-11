@@ -86,7 +86,13 @@ def save_history(account, trades=(), lots=None, report_end=None, coverage=None):
                     if corrected or revision:
                         merged.pop(identity)
                 else:
-                    merged[trade['exec_id']] = trade
+                    # A Flex row is authoritative and replaces the record; a live fill only fills in
+                    # what it knows (None = not supplied, 0 and False are real values).
+                    record = trade if trade.get('source') == 'flex' else {
+                        **merged.get(trade['exec_id'], {}), **{k: v for k, v in trade.items() if v is not None}}
+                    if not record.get('time'):
+                        raise ValueError('Execution has no timestamp; existing history retained')
+                    merged[trade['exec_id']] = record
         old['trades'] = sorted(merged.values(), key=lambda t: t['time'])
         if lots is not None and (not old.get('report_end') or report_end >= old['report_end']):
             old.update(lots=lots, report_end=report_end)

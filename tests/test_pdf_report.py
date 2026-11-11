@@ -85,7 +85,7 @@ def test_export_pdf_end_to_end(demo_payload, demo_df, demo_summary, monkeypatch)
     from ui.reports import pdf as pdf_renderer
     value = series([100 + i for i in range(30)])
     monkeypatch.setattr(pdf_renderer, 'fetch_performance',
-                        lambda positions, base: (value, series([200.0] * 30), [('VWCE', 'no price history')]))
+                        lambda positions, account: (value, series([200.0] * 30), [('VWCE', 'no price history')]))
     captured = {}
 
     class App:
@@ -109,5 +109,84 @@ def test_export_pdf_end_to_end(demo_payload, demo_df, demo_summary, monkeypatch)
     assert raw.startswith(b'%PDF')
 
     # Still renders when history and market intel are both missing.
-    monkeypatch.setattr(pdf_renderer, 'fetch_performance', lambda positions, base: None)
+    monkeypatch.setattr(pdf_renderer, 'fetch_performance', lambda positions, account: None)
     assert captured['fn'](1, data, None)['filename'].endswith('.pdf')
+
+
+def _pdf_tables(data, monkeypatch, perf=lambda positions, account: None):
+    """Build the PDF with fetch_performance stubbed; return the table rows it drew."""
+    pytest.importorskip('reportlab')
+    from reportlab.platypus import Table
+
+    from ui.reports import pdf as pdf_renderer
+    rows = []
+    original = Table.__init__
+
+    def record(self, cells, *args, **kwargs):
+        rows.extend(cells)
+        original(self, cells, *args, **kwargs)
+
+    monkeypatch.setattr(Table, '__init__', record)
+    monkeypatch.setattr(pdf_renderer, 'fetch_performance', perf)
+    pdf_renderer.build_pdf(data)
+    return rows
+
+
+def _pdf_data(demo_df, demo_summary, **summary):
+    return {'positions': demo_df.to_dict('records'), 'summary': dict(demo_summary, **summary),
+            'account': {'base_currency': 'EUR', 'portfolio_value_units': 'base', 'eurusd_rate': 2.0}}
+
+
+def test_pdf_total_return_unavailable_is_not_rebuilt_from_pnl(demo_df, demo_summary, monkeypatch):
+    # EUR 100 -> 50 plus USD 100 -> 200 at 0.50 EUR/USD: the old fallback printed +50% here.
+    data = _pdf_data(demo_df, demo_summary, total_pnl_pct=None, total_value=150.0, total_unrealized_pnl=50.0)
+    rows = _pdf_tables(data, monkeypatch)
+    assert rows[rows.index(['Total Return', 'Today', 'Best Performer', 'Worst Performer']) + 1][0] == '—'
+
+
+def test_pdf_total_return_uses_backend_value_unchanged(demo_df, demo_summary, monkeypatch):
+    data = _pdf_data(demo_df, demo_summary, total_pnl_pct=12.5)
+    rows = _pdf_tables(data, monkeypatch)
+    assert rows[rows.index(['Total Return', 'Today', 'Best Performer', 'Worst Performer']) + 1][0] == '+12.50%'
+
+
+def _history(values):
+    return {'prices': values, 'dates': [d.strftime('%Y-%m-%d') for d in pd.bdate_range(end='2026-10-23', periods=len(values))]}
+
+
+def test_pdf_performance_is_the_account_level_return_with_cash_and_a_short(demo_df, demo_summary, monkeypatch):
+    import backend.portfolio.analysis as analysis
+    from ui.reports import pdf as pdf_renderer
+    n = 300
+    # Long 10,000 +10% and short 5,000 +10% on the last day, 100,000 account: 0.1*10% - 0.05*10% = +0.50%.
+    long_, short = _history([100.0] * (n - 1) + [110.0]), _history([100.0] * (n - 1) + [110.0])
+    positions = [dict(demo_df.iloc[0].to_dict(), ticker='LONG', conId=1, currency='EUR', quantity=100, base_market_value=10000.0),
+                 dict(demo_df.iloc[0].to_dict(), ticker='SHRT', conId=2, currency='EUR', quantity=-50, base_market_value=-5000.0)]
+    account = {'base_currency': 'EUR', 'portfolio_value_units': 'base', 'net_liquidation': 100000.0}
+    flat = pd.Series([1.0] * n, index=pd.bdate_range(end='2026-10-23', periods=n))
+    monkeypatch.setattr(analysis, 'get_position_history', lambda p, period: long_ if p['ticker'] == 'LONG' else short)
+    monkeypatch.setattr(analysis, 'get_compare_history', lambda symbol, period: flat)
+    monkeypatch.setattr(analysis, 'get_estr_history', lambda: flat * 3)
+    data = dict(_pdf_data(demo_df, demo_summary), positions=positions, account=account)
+
+    rows = _pdf_tables(data, monkeypatch, pdf_renderer.fetch_performance)
+    portfolio = next(r for r in rows if r[0] == 'Portfolio')
+    assert portfolio[1:] == ['+0.50%'] * 5
+
+
+@pytest.mark.parametrize('equity', [None, 0.0, -5.0])
+def test_pdf_performance_needs_positive_account_equity(demo_df, demo_summary, monkeypatch, equity):
+    import backend.portfolio.analysis as analysis
+    from ui.reports import pdf as pdf_renderer
+    positions = demo_df.to_dict('records')
+    # History is fully available, so only the equity check can make the result unavailable.
+    n = 300
+    flat = pd.Series([1.0] * n, index=pd.bdate_range(end='2026-10-23', periods=n))
+    monkeypatch.setattr(analysis, 'get_position_history', lambda p, period: _history([100.0] * n))
+    monkeypatch.setattr(analysis, 'get_compare_history', lambda symbol, period: flat)
+    monkeypatch.setattr(analysis, 'get_estr_history', lambda: flat * 3)
+    account = {'base_currency': 'EUR', 'portfolio_value_units': 'base', 'net_liquidation': equity}
+    assert pr.fetch_performance(positions, account) is None
+    data = dict(_pdf_data(demo_df, demo_summary), account=account)
+    rows = _pdf_tables(data, monkeypatch, pdf_renderer.fetch_performance)
+    assert not any(r[0] == 'Return' for r in rows)

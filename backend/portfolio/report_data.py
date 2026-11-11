@@ -1,19 +1,13 @@
 """Prepare portfolio-report data: period returns and benchmark comparisons.
 
-fetch_performance reuses the same price cache as the dashboard."""
+fetch_performance reuses the account-equity calculation (and price cache) of the dashboard."""
 
 from __future__ import annotations
 
-import logging
-
 import pandas as pd
 
-from backend.network import run_parallel
-from backend.portfolio.history import compare_frame, get_compare_history, get_portfolio_history
+from backend.portfolio.history import compare_frame
 
-log = logging.getLogger(__name__)
-
-BENCHMARK = '^GSPC'
 BENCHMARK_NAME = 'S&P 500'
 CHART_DAYS = 7               # calendar days shown in the weekly chart
 _START_TOLERANCE = pd.Timedelta(days=5)   # a '1y' download may start a few days late
@@ -83,29 +77,18 @@ def weekly_frame(value: pd.Series, bench: pd.Series | None, days: int = CHART_DA
     return compare_frame(window, others, 'pct')
 
 
-def fetch_performance(positions: list[dict], base_ccy: str, account=None):
-    """(portfolio value series, S&P 500 series | None, [(ticker, reason left out)]), or None.
+def fetch_performance(positions: list[dict], account: dict | None):
+    """(account-equity series, S&P 500 series | None, excluded), or None when unavailable.
 
-    The portfolio series is the dashboard's backcast (today's holdings valued at
-    dividend-adjusted historical closes), so it is a like-for-like comparison, not an account ledger.
+    The same account-equity scenarios the Performance page shows; no positive
+    account equity (or any missing input) means no result, never a holdings-only substitute.
     """
-    if account and account.get('net_liquidation'):
-        from backend.portfolio.analysis import account_history
-        try:
-            return account_history({'positions': positions, 'account': account}, '1Y')
-        except ValueError:
-            return None
-    slim = [{'ticker': p.get('ticker'), 'quantity': p.get('quantity'),
-             'currency': p.get('currency') or '', 'multiplier': p.get('multiplier')}
-            for p in positions]
-    results = run_parallel({
-        'portfolio': lambda: get_portfolio_history(slim, base_ccy, '1Y'),
-        'bench': lambda: get_compare_history(BENCHMARK, '1Y'),
-    })
-    value, excluded = results.get('portfolio') or (None, [])
-    if value is None or len(value) < 2:
+    from backend.portfolio.analysis import account_history
+    try:
+        # exposure_returns rejects non-positive equity, the same rule the Performance page uses.
+        return account_history({'positions': positions, 'account': account or {}}, '1Y')
+    except ValueError:
         return None
-    return value, results.get('bench'), excluded
 
 
 # ── Chart ────────────────────────────────────────────────────────────────────

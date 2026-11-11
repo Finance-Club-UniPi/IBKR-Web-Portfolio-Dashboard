@@ -5,31 +5,9 @@ What this repo does: A private dashboard that reads an IBKR portfolio, calculate
 Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only; previous reports remain in Git.
 **Recent** means introduced or exposed by the latest portfolio changes. **Earlier** means the problem existed before those changes. Finding numbers replace the old audit IDs.
 
+**Update, 11 November 2026 (`fix/audit-batch-a`):** findings 1–4 are fixed and removed from the list below; the remaining numbers are unchanged. 1: a Flex record replaces the stored execution whole, a live fill only adds the fields it carries, and a fill without a timestamp is rejected. 2: the position button deletes only uploaded trades that no other held position also shows, and reports how many shared trades it kept. 3: the PDF shows Total Return as unavailable when the backend has no verified value. 4: PDF performance uses the shared account-equity calculation only; the holdings-only fallback is deleted. Each fix has a regression test that fails when the fix is reverted (checked by mutation). 231 tests pass; Ruff and smoke checks pass.
+
 ## Must fix
-
-1. **Live fills erase richer Flex history** — Recent; [flex.py:89](backend/providers/flex.py#L89)
-   - **What this is:** Combines live executions (individual trade fills) with downloaded broker statements.
-   - **Problem:** Saving a live fill with the same execution ID replaces the whole Flex record. The reproduced case loses opening FX, transaction ID and commission fields, even though the live fill supplies none of them.
-   - **Fix:** Merge updates for the same execution ID and preserve fields absent from the incoming record. Test Flex → live → Flex imports.
-   - **If we skip it:** A routine refresh removes information needed for accurate purchase-date currency attribution.
-
-2. **Deleting history inside one holding clears every holding** — Earlier; [detail.py:356](ui/callbacks/detail.py#L356)
-   - **What this is:** The “Delete trade history” button inside a selected position's details.
-   - **Problem:** With uploaded trades for X and Y, clicking that button removes both histories. The callback has no selected-position input and calls the global delete function.
-   - **Fix:** Delete only the selected account/contract's uploaded trades. Keep any global-delete action separately and clearly labelled.
-   - **If we skip it:** A user trying to clear one holding can lose all uploaded trade history.
-
-3. **The PDF invents a return that the backend marked unavailable** — Recent integration; [pdf.py:190](ui/reports/pdf.py#L190)
-   - **What this is:** The PDF's “Total Return” percentage.
-   - **Problem:** When the backend supplies `None`, the PDF rebuilds the percentage from mixed-currency P&L. A EUR holding costing 100 and worth 50, plus a USD holding costing 100 and worth 200 at 0.50 EUR/USD, has 0% combined return; the PDF prints +50%.
-   - **Fix:** Delete the fallback calculation. Show unavailable until the backend supplies a verified return in one currency.
-   - **If we skip it:** The exported report contradicts the dashboard and can show the wrong profit percentage.
-
-4. **PDF performance still excludes cash** — Recent integration; [pdf.py:235](ui/reports/pdf.py#L235)
-   - **What this is:** Historical returns and the benchmark chart in the PDF.
-   - **Problem:** The PDF omits the account argument when calling `fetch_performance`, selecting the old holdings-only calculation. A 10% stock move produces 1% account return at 10% exposure, but the PDF reports 10% while describing account-equity scenarios.
-   - **Fix:** Pass the account to the existing shared helper. Add a PDF regression with substantial cash and a short position.
-   - **If we skip it:** Page and PDF performance use different methods, despite their matching beta cards.
 
 5. **Dividend totals assume every payment is USD** — Earlier; [summary.py:447](ui/components/summary.py#L447), [pdf.py:162](ui/reports/pdf.py#L162)
    - **What this is:** Projected income, payment amounts and portfolio dividend yield.
@@ -98,6 +76,18 @@ Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only;
     - **Problem:** Publishing neither runs nor requires the separate checks workflow. A main-branch push or version tag containing failing tests can still publish an image; tag releases do not trigger the current checks workflow at all.
     - **Fix:** Require the existing lint, smoke and regression checks to succeed before publishing the same commit.
     - **If we skip it:** A broken release can reach users despite having a test suite.
+
+16. **PDF benchmark is in base currency; the page's is in USD** — Recent; [report_data.py:89](backend/portfolio/report_data.py#L89), [performance.py:143](ui/callbacks/performance.py#L143)
+    - **What this is:** The S&P 500 comparison rows in the PDF and on the Performance page.
+    - **Problem:** The PDF now takes the benchmark from `account_history`, converted to the account's base currency; the page still compares against `^GSPC` in USD. With the S&P flat in USD and USD down 10% against EUR, the PDF shows −10.0% and the page 0.0%. Neither label names the currency. A failed USD FX fetch also drops the PDF's S&P rows.
+    - **Fix:** Decide on one convention (base currency is the like-for-like comparison for an account-equity return), apply it to both, and label the currency.
+    - **If we skip it:** The PDF's "Difference (pp)" contradicts the page.
+
+17. **Per-position delete skips the v1 backup** — Recent; [trades.py:199](backend/storage/trades.py#L199)
+    - **What this is:** Rewriting the uploaded-trades store after a per-position delete.
+    - **Problem:** On an old v1 store (a plain list), the delete rewrites the file as v2 without the `.v1-backup` copy that saving makes. No trades are lost.
+    - **Fix:** Reuse the save path's backup step before the rewrite.
+    - **If we skip it:** The one-time v1 safety copy is missing for users whose first write after upgrading is a delete.
 
 ## Validation and limits
 

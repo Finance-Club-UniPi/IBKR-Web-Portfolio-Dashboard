@@ -189,11 +189,24 @@ def save_uploaded_trades(new_trades: list) -> list:
         return existing
 
 
-def clear_uploaded_trades() -> list:
+def trade_in_position(t, con_id, account, ticker, ticker_unique) -> bool:
+    """The rule for which trades belong to a position; the detail view and per-holding delete share it."""
+    if t.get('conId'):
+        return t['conId'] == con_id and (not t.get('account') or t['account'] == account)
+    return t.get('ticker') == ticker and ticker_unique
+
+
+def delete_uploaded_trades(match) -> list:
+    """Drop stored trades for which `match(trade)` is true; return what remains.
+
+    Reads and rewrites under the same lock as saves; an unreadable store raises and is left untouched.
+    """
     with _WRITE_LOCK:
-        if os.path.exists(_STORE_PATH):
-            os.remove(_STORE_PATH)
-    return []
+        if not os.path.exists(_STORE_PATH):
+            return []
+        kept = [t for t in load_uploaded_trades() if not match(t)]
+        atomic_json(_STORE_PATH, {'schema_version': 2, 'trades': kept})
+        return kept
 
 
 def atomic_json(path, data):

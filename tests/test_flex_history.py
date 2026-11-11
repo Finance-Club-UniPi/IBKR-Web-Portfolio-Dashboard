@@ -169,3 +169,62 @@ def test_sync_fills_a_gap_after_more_than_a_year_offline(history_file, monkeypat
     flex.sync_history('TEST', 'SECRET', 'Q', 'UTC')
     assert calls[1][0] == old_end + timedelta(days=1)
     assert calls[-1][1] == calls[0][0] - timedelta(days=1)
+
+
+def _live(trade, **extra):
+    """Shape of a live ib_async fill: no fx_rate, commission, transaction_id or source."""
+    keep = ('account', 'conId', 'currency', 'exec_id', 'ticker', 'side', 'shares', 'price', 'time')
+    return {**{k: trade[k] for k in keep}, **extra}
+
+
+def _saved(exec_id='a.b.1.01'):
+    return next(t for t in flex.read_history()['accounts']['TEST']['trades'] if t['exec_id'] == exec_id)
+
+
+def test_live_fill_keeps_flex_only_fields(history_file):
+    trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'commission': 1.5, 'commission_currency': 'USD'}
+    flex.save_history('TEST', [trade])
+    flex.save_history('TEST', [_live(trade)])
+    saved = _saved()
+    assert (saved['fx_rate'], saved['transaction_id'], saved['commission'], saved['commission_currency']) == (.8, '123', 1.5, 'USD')
+    assert saved['source'] == 'flex'
+
+
+def test_later_flex_import_wins_after_live_fill(history_file):
+    trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'commission': 1.5}
+    flex.save_history('TEST', [trade])
+    flex.save_history('TEST', [_live(trade)])
+    flex.save_history('TEST', [{**trade, 'fx_rate': .9, 'commission': 2.0, 'transaction_id': '456'}])
+    saved = _saved()
+    assert (saved['fx_rate'], saved['commission'], saved['transaction_id']) == (.9, 2.0, '456')
+
+
+def test_live_fill_with_new_value_updates_that_field(history_file):
+    trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'commission': 1.5}
+    flex.save_history('TEST', [trade])
+    flex.save_history('TEST', [_live(trade, price=101, commission=0)])
+    saved = _saved()
+    assert saved['price'] == 101 and saved['commission'] == 0 and saved['fx_rate'] == .8
+
+
+def test_none_valued_field_does_not_erase_known_value(history_file):
+    trade = flex.parse_report(xml(), 'UTC')[0]['trades'][0]
+    flex.save_history('TEST', [trade])
+    flex.save_history('TEST', [{**_live(trade), 'fx_rate': None}])
+    assert _saved()['fx_rate'] == .8
+
+
+def test_flex_re_report_replaces_the_stored_record_whole(history_file):
+    trade = {**flex.parse_report(xml(), 'UTC')[0]['trades'][0], 'correction_of': 'T1'}
+    flex.save_history('TEST', [trade])
+    flex.save_history('TEST', [{**trade, 'fx_rate': None, 'correction_of': None}])
+    saved = _saved()
+    assert saved['fx_rate'] is None and saved['correction_of'] is None and saved['transaction_id'] == '123'
+
+
+def test_new_live_fill_without_time_is_a_value_error_and_writes_nothing(history_file):
+    trade = flex.parse_report(xml(), 'UTC')[0]['trades'][0]
+    flex.save_history('TEST', [trade])
+    with pytest.raises(ValueError):
+        flex.save_history('TEST', [{**_live(trade), 'exec_id': 'x.y.1.01', 'time': None}])
+    assert [t['exec_id'] for t in flex.read_history()['accounts']['TEST']['trades']] == ['a.b.1.01']
