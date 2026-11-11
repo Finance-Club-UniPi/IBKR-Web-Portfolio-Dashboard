@@ -5,7 +5,7 @@ What this repo does: A private dashboard that reads an IBKR portfolio, calculate
 Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only; previous reports remain in Git.
 **Recent** means introduced or exposed by the latest portfolio changes. **Earlier** means the problem existed before those changes. Finding numbers replace the old audit IDs.
 
-**Update, 11 November 2026 (`fix/audit-batch-a`):** findings 1–4 are fixed and removed from the list below; the remaining numbers are unchanged. 1: a Flex record replaces the stored execution whole, a live fill only adds the fields it carries, and a fill without a timestamp is rejected. 2: the position button deletes only uploaded trades that no other held position also shows, and reports how many shared trades it kept. 3: the PDF shows Total Return as unavailable when the backend has no verified value. 4: PDF performance uses the shared account-equity calculation only; the holdings-only fallback is deleted. Review follow-ups on the same branch: a live fill never changes a stored Flex value and only fills missing fields; a fill without a timestamp is skipped and logged instead of rejecting the batch; a separate, confirmed "Delete ALL uploaded trades" button clears the store without parsing it (recovery from a corrupt file); per-position deletes keep the one-time v1 backup; write errors show a fixed message instead of a file path. Each fix has a regression test that fails when the fix is reverted (checked by mutation). 237 tests pass; Ruff and smoke checks pass. Finding 17 was fixed in review; 16, 18 and 19 are new.
+**Update, 11 November 2026 (`fix/audit-batch-a`):** findings 1–4 are fixed and removed from the list below; the remaining numbers are unchanged. 1: a Flex record replaces the stored execution whole; a live fill never changes a stored Flex value and only fills missing fields; a fill without a timestamp is skipped and logged. 2: the position button deletes only uploaded trades that no other held position also shows, and reports how many shared trades it kept. 3: the PDF shows Total Return as unavailable when the backend has no verified value. 4: PDF performance uses the shared account-equity calculation only; the holdings-only fallback is deleted. Review follow-ups on the same branch: a separate, confirmed "Delete ALL uploaded trades" button clears the store without parsing it (recovery from a corrupt file); per-position deletes keep the one-time v1 backup; write errors show a fixed message instead of a file path. Each fix has a regression test that fails when the fix is reverted (checked by mutation). 237 tests pass; Ruff and smoke checks pass. Finding 17 was fixed in review; 16, 18, 19 and 20 are new.
 
 ## Must fix
 
@@ -94,6 +94,12 @@ Checked `fix-FX-and-beta` at `b0d559d`. This report lists current problems only;
     - **Problem:** The backend always sets `total_pnl_pct=None`, and the PDF no longer rebuilds it from mixed-currency P&L, so it always shows "—".
     - **Fix:** Compute it in the backend from verified base-currency cost and value; leave it unavailable when any holding lacks them.
     - **If we skip it:** The headline return figure is permanently blank.
+
+20. **Broker-history write errors show a file path** — Earlier; [portfolio_service.py:88](backend/portfolio_service.py#L88)
+    - **What this is:** The status note under the FX total card when saving broker history fails.
+    - **Problem:** `OSError` text is shown as-is; with a read-only data directory it contains the full data path. The uploaded-trades handlers already show a fixed message instead.
+    - **Fix:** Show a fixed message for `OSError` and log the detail.
+    - **If we skip it:** The local data path appears in the dashboard.
 
 ## Validation and limits
 
