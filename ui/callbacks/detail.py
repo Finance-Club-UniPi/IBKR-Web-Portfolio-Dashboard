@@ -9,7 +9,13 @@ from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 from backend.providers.market_data import get_etf_brief_data, get_stock_fundamentals
 from backend.schemas import PortfolioData
-from backend.storage.trades import parse_activity_csv, save_uploaded_trades
+from backend.storage.trades import (
+    clear_uploaded_trades,
+    delete_uploaded_trades,
+    parse_activity_csv,
+    save_uploaded_trades,
+    trade_in_position,
+)
 from ui.components.position import (
     _build_etf_section,
     _build_fundamentals_section,
@@ -35,6 +41,7 @@ from ui.styles import (
 )
 
 log = logging.getLogger(__name__)
+_WRITE_FAILED = 'Could not write trade history; see the app log'
 
 _LINK_STYLE = LINK_PILL
 _PERIOD_CHOICES = ['1M', '3M', '1Y', '3Y', '5Y']
@@ -181,9 +188,9 @@ def register(app):
         # Collect trades for this ticker from live fills + uploaded CSV history.
         live_trades = (data.get('trades') or []) if isinstance(data, dict) else []
         all_trades  = list(uploaded or []) + list(live_trades)
-        ticker_trades = [t for t in all_trades if (
-            (t.get('conId') == r.get('conId') and (not t.get('account') or t['account'] == r.get('account')))
-            if t.get('conId') else (t.get('ticker') == ticker and len(df[df['ticker'] == ticker]) == 1))]
+        unique = len(df[df['ticker'] == ticker]) == 1
+        ticker_trades = [t for t in all_trades
+                         if trade_in_position(t, r.get('conId'), r.get('account'), ticker, unique)]
 
         # Price history chart with period toggle + CSV upload button
         sel_period = period if period in _PERIOD_CHOICES else '1M'
@@ -200,8 +207,8 @@ def register(app):
             }),
         )
         delete_btn = html.Button(
-            "Delete trade history",
-            id={'type': 'position-delete-trades', 'index': 0},
+            "Delete uploaded trades",
+            id={'type': 'position-delete-trades', 'index': r.get('position_id', ticker)},
             n_clicks=0,
             style={
                 'background': 'transparent', 'color': COLOR_BAD,
@@ -210,6 +217,20 @@ def register(app):
                 'cursor': 'pointer', 'fontWeight': '500',
                 'fontFamily': 'inherit',
             },
+        )
+        clear_all_btn = dcc.ConfirmDialogProvider(
+            id={'type': 'position-clear-all-trades', 'index': 0},
+            message='Delete ALL uploaded trades for EVERY holding? This cannot be undone.',
+            children=html.Button(
+                "Delete ALL uploaded trades (every holding)",
+                style={
+                    'background': COLOR_BAD, 'color': COLOR_SURFACE_WHITE,
+                    'border': f'1px solid {COLOR_BAD}', 'borderRadius': '6px',
+                    'padding': '5px 12px', 'fontSize': '13px',
+                    'cursor': 'pointer', 'fontWeight': '500',
+                    'fontFamily': 'inherit',
+                },
+            ),
         )
         upload_help = html.Details([
             html.Summary("How to export from IBKR ▸", style={
@@ -224,7 +245,7 @@ def register(app):
             ], style={'fontSize': '13px', 'color': COLOR_TEXT, 'lineHeight': '1.7',
                       'fontWeight': '500',
                       'paddingLeft': '20px', 'margin': '6px 0 8px'}),
-            html.Div([upload_btn, delete_btn],
+            html.Div([upload_btn, delete_btn, clear_all_btn],
                      style={'display': 'flex', 'gap': '8px', 'alignItems': 'center',
                             'marginBottom': '4px'}),
         ])
@@ -343,20 +364,70 @@ def register(app):
 
         try:
             merged = save_uploaded_trades(parsed)
-        except (ValueError, OSError) as e:
+        except ValueError as e:
             return no_update, _broadcast(str(e), COLOR_BAD, contents_list)
+        except OSError:
+            log.exception('Could not write uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, contents_list)
         return merged, _broadcast(f"{len(parsed)} parsed · {len(merged)} total stored", COLOR_GOOD, contents_list)
 
     @app.callback(
         Output('uploaded-trades', 'data', allow_duplicate=True),
         Output({'type': 'position-upload-status', 'index': ALL}, 'children', allow_duplicate=True),
         Input({'type': 'position-delete-trades', 'index': ALL}, 'n_clicks'),
+        State('portfolio-data', 'data'),
         prevent_initial_call=True,
     )
-    def handle_delete_trades(n_clicks_list):
-        from backend.storage.trades import clear_uploaded_trades
-
-        if not any(n_clicks_list or []):
+    def handle_delete_trades(n_clicks_list, data):
+        fired = ctx.triggered[0]['value'] if ctx.triggered else None
+        tid = ctx.triggered_id
+        if not fired or not isinstance(tid, dict) or not data or 'positions' not in data:
             return no_update, [no_update for _ in (n_clicks_list or [])]
-        cleared = clear_uploaded_trades()
-        return cleared, _broadcast("Trade history deleted", COLOR_WARN, n_clicks_list)
+        df = pd.DataFrame(data['positions'])
+        matches = df[(df['position_id'] if 'position_id' in df else df['ticker']) == tid['index']]
+        if matches.empty:
+            return no_update, _broadcast("Position not found", COLOR_BAD, n_clicks_list)
+        r = matches.iloc[0]
+        counts = df['ticker'].value_counts()
+        others = df.drop(matches.index[0])
+        deleted = kept = 0
+
+        def match(t):
+            nonlocal deleted, kept
+            if not trade_in_position(t, r.get('conId'), r.get('account'), r['ticker'], counts[r['ticker']] == 1):
+                return False
+            if any(trade_in_position(t, o.get('conId'), o.get('account'), o['ticker'], counts[o['ticker']] == 1)
+                   for _, o in others.iterrows()):
+                kept += 1
+                return False
+            deleted += 1
+            return True
+
+        try:
+            remaining = delete_uploaded_trades(match)
+        except ValueError as e:
+            return no_update, _broadcast(str(e), COLOR_BAD, n_clicks_list)
+        except OSError:
+            log.exception('Could not write uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, n_clicks_list)
+        msg = f"Deleted {deleted} uploaded trade{'s' * (deleted != 1)}"
+        if kept:
+            msg += f"; kept {kept} shared with another holding"
+        return remaining, _broadcast(msg, COLOR_WARN, n_clicks_list)
+
+    @app.callback(
+        Output('uploaded-trades', 'data', allow_duplicate=True),
+        Output({'type': 'position-upload-status', 'index': ALL}, 'children', allow_duplicate=True),
+        Input({'type': 'position-clear-all-trades', 'index': ALL}, 'submit_n_clicks'),
+        State({'type': 'position-upload-status', 'index': ALL}, 'children'),
+        prevent_initial_call=True,
+    )
+    def handle_clear_all_trades(submit_list, status_list):
+        if not any(submit_list or []):
+            return no_update, [no_update for _ in (status_list or [])]
+        try:
+            clear_uploaded_trades()
+        except OSError:
+            log.exception('Could not delete uploaded trades')
+            return no_update, _broadcast(_WRITE_FAILED, COLOR_BAD, status_list)
+        return [], _broadcast("All uploaded trades deleted (every holding)", COLOR_WARN, status_list)

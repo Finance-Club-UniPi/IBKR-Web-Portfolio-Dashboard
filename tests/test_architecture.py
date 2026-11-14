@@ -77,7 +77,7 @@ def test_app_serves_layout_dependencies_and_assets():
     for route in ('/', '/_dash-layout', '/_dash-dependencies', '/assets/custom.css',
                   '/assets/finance-club-logo.png'):
         assert client.get(route).status_code == 200, route
-    assert len(app.callback_map) == 61
+    assert len(app.callback_map) == 62
 
 
 def test_live_weight_basis_uses_verified_price_and_account_currency():

@@ -188,9 +188,6 @@ def build_pdf(data, intel=None, *, demo=False):
     perf = []
     section_header("Performance", perf)
     total_pct = s.get('total_pnl_pct')
-    cost_basis = total_val - unreal_pnl
-    if total_pct is None and cost_basis:
-        total_pct = unreal_pnl / cost_basis * 100
     prior_val = total_val - daily_pnl if daily_pnl is not None else None
     today_pct = daily_pnl / prior_val * 100 if values_base and prior_val else None
     best   = s.get('best_performer', '—')
@@ -232,7 +229,7 @@ def build_pdf(data, intel=None, *, demo=False):
     # Portfolio vs S&P 500 — period returns plus a chart of the last week.
     # Network/history failures only drop this part; the rest of the PDF stays.
     try:
-        hist = fetch_performance(data['positions'], base_ccy)
+        hist = fetch_performance(data['positions'], a)
     except Exception as e:
         log.warning('PDF performance history unavailable: %s', e)
         hist = None
