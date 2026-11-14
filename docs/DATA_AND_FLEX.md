@@ -1,5 +1,8 @@
 # Portfolio data, beta, and automatic IBKR history
 
+For why Flex is used and where it appears in the code, see
+[FLEX_INTEGRATION.md](FLEX_INTEGRATION.md).
+
 Current valuation needs a native price, quantity, currency, and a conversion
 rate to the account currency. It does **not** need yesterday's FX or purchase
 history. IBKR account snapshots and `ExchangeRate` are the primary source.
@@ -49,6 +52,19 @@ create an **Activity Flex Query**, with XML output. Include:
   trade IDs, FX Rate to Base, commission and commission currency.
 - **Open Positions**, detail **Lots**: Conid, currency, side, quantity,
   Open Date Time, originating transaction ID, report date and cost fields.
+
+For the **Since inception** performance period (the account's actual
+time-weighted return, matching IBKR), also include:
+
+- **Net Asset Value (NAV) in Base** (the daily by-report-date rows with `Total`): daily NAV.
+- **Cash Transactions**, level **Detail**, with the *Deposits & Withdrawals* type
+  enabled, plus Currency, FX Rate to Base, Report Date and Transaction ID.
+  Dividends, interest and fees stay inside the return; only deposits/withdrawals
+  are removed as external flows.
+
+Without these two sections the rest of the dashboard keeps working and the
+Since inception view explains what is missing. Existing stored history is
+re-read for the latest window once so NAV can be filled in.
 
 Use `yyyyMMdd` dates and `HHmmss` times. Enable Flex Web Service and generate a
 reporting token. Set an appropriate token validity and renew it when it expires.

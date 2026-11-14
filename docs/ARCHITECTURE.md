@@ -29,7 +29,8 @@ python -m pytest -q
 The tests use fixtures and mocked provider responses. They do not validate a
 live brokerage account. CI runs all three checks on Python 3.12. Read
 [DATA_AND_FLEX.md](DATA_AND_FLEX.md) for current valuation, shared beta and
-automatic trade-history setup.
+automatic trade-history setup, and [FLEX_INTEGRATION.md](FLEX_INTEGRATION.md)
+for why Flex is used and where it appears in the code.
 
 ## Directory map
 
@@ -48,6 +49,7 @@ backend/
     risk.py                 Pure risk metrics, benchmark FX conversion, and risk-free averaging
     exposure.py             Shared sector/country aggregation
     fundamentals.py         Investment signal labels from fetched fundamentals
+    performance.py          Actual account time-weighted return from Flex NAV and deposits
     report_data.py          PDF data and performance comparisons
   providers/
     ibkr.py                 Broker connection, retries, snapshot normalization
@@ -123,6 +125,7 @@ enables an aggregate fallback. Current valuation needs no previous FX close.
 | Click, sort, upload behavior | `ui/callbacks/detail.py` | `tests/test_audit_regressions.py`, `tests/test_trade_storage.py` |
 | Position detail appearance | `ui/components/position.py` | App and component checks |
 | Historical performance | `backend/portfolio/analysis.py`, `history.py`, `ui/callbacks/performance.py` | `tests/test_performance.py` |
+| Since-inception (account TWR) | `backend/portfolio/performance.py`, `backend/providers/flex.py` | `tests/test_inception_performance.py` |
 | Macro sources or thresholds | `backend/providers/valuation.py` | `tests/test_audit_regressions.py`, smoke checks |
 | Preset Coach calculations | `backend/coaching/scenarios.py` | Test returned answer data before testing rendering |
 | Coach appearance | `ui/components/scenarios.py`, `chat.py`, `coach_panel.py` | `tests/test_coach.py`, `tests/test_news.py` |
@@ -159,6 +162,11 @@ enables an aggregate fallback. Current valuation needs no previous FX close.
   scenarios from dividend-adjusted historical prices and daily FX, including
   foreign cash. This is not an account ledger; past trading, borrowing,
   financing and transaction costs are excluded.
+- **Since inception:** the account's own time-weighted return from IBKR's daily
+  NAV (Flex Net Asset Value (NAV) in Base) with external deposits/withdrawals
+  removed: `r = NAV(t) / (NAV(t-1) + flow(t)) - 1`, chained. Cash is included.
+  A missing NAV or Cash Transactions section produces an unavailable result with
+  instructions, never a backcast substitute. It ends at the last Flex report day.
 - **Buffett ratio:** matched annual observations from World Bank
   [listed domestic market capitalization in current USD](https://data.worldbank.org/indicator/CM.MKT.LCAP.CD)
   and [GDP in current USD](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD).

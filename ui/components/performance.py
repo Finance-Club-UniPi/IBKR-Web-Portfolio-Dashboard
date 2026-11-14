@@ -15,12 +15,12 @@ from dash import dcc, html
 
 from backend.portfolio.history import (
     CUSTOM,
-    DEFAULT_PERIOD,
     MAX_COMPARE,
     MAX_LOOKBACK_YEARS,
     PERIODS,
     custom_bounds,
 )
+from backend.portfolio.performance import INCEPTION
 from ui.helpers import section_label
 from ui.styles import (
     CARD,
@@ -51,8 +51,9 @@ def performance_card():
                     options=[{'label': 'Absolute', 'value': 'abs'},
                              {'label': '% return', 'value': 'pct'}]),
                 dcc.RadioItems(
-                    id='perf-period', className='seg', value=DEFAULT_PERIOD,
-                    options=[{'label': p, 'value': p} for p in PERIODS] +
+                    id='perf-period', className='seg', value=INCEPTION,
+                    options=[{'label': INCEPTION, 'value': INCEPTION}] +
+                            [{'label': p, 'value': p} for p in PERIODS] +
                             [{'label': CUSTOM, 'value': CUSTOM}]),
             ], style={'display': 'flex', 'gap': '12px', 'flexWrap': 'wrap'}),
         ], style={'display': 'flex', 'justifyContent': 'space-between',

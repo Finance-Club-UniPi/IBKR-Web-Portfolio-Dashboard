@@ -46,6 +46,9 @@ _DEFAULTS: dict = {
     'app': {
         'demo_mode': False,
     },
+    'performance': {
+        'start_date': None,     # ISO date the "Since inception" return counts from; None = first NAV day
+    },
 }
 
 
@@ -86,6 +89,9 @@ def _apply_env_overrides(cfg: dict) -> dict:
     # Display
     if env('EURUSD_FALLBACK'):
         cfg['display']['eurusd_fallback'] = float(env('EURUSD_FALLBACK'))
+
+    if env('PERFORMANCE_START_DATE'):
+        cfg['performance']['start_date'] = env('PERFORMANCE_START_DATE')
 
     # App-wide
     if env('DEMO_MODE'):

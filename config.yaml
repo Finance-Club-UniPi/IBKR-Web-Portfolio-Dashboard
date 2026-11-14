@@ -12,3 +12,8 @@ dashboard:
 
 display:
   eurusd_fallback: 1.08
+
+performance:
+  # "Since inception" counts the account's return from this date (the portfolio
+  # started trading on 2 Nov). Remove the line to start at the first Flex NAV day.
+  start_date: "2026-11-02"

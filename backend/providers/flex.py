@@ -60,12 +60,31 @@ def _validate_history(result):
                     raise ValueError('Invalid saved open lot')
                 if datetime.fromisoformat(str(lot.get('opened_at', ''))).tzinfo is None:
                     raise ValueError('Saved lot timestamp has no timezone')
+            nav = state.get('nav', {})
+            if not isinstance(nav, dict):
+                raise ValueError('Invalid saved NAV history')
+            for day, total in nav.items():
+                date.fromisoformat(day)
+                if not math.isfinite(float(total)) or float(total) < 0:
+                    raise ValueError('Invalid saved NAV value')
+            flows = state.get('flows', [])
+            if not isinstance(flows, list):
+                raise ValueError('Invalid saved cash-flow history')
+            for flow in flows:
+                if not isinstance(flow, dict) or not flow.get('id') or not math.isfinite(float(flow.get('amount', float('nan')))):
+                    raise ValueError('Invalid saved cash flow')
+                date.fromisoformat(str(flow.get('day', '')))
     except (TypeError, KeyError, OverflowError) as e:
         raise ValueError("Invalid broker history record; previous data retained") from e
 
 
-def save_history(account, trades=(), lots=None, report_end=None, coverage=None):
-    """Merge by real execution identity, preserving reports on read/write failures."""
+def save_history(account, trades=(), lots=None, report_end=None, coverage=None, nav=None, flows=None):
+    """Merge by real execution identity, preserving reports on read/write failures.
+
+    `nav` maps ISO report day → account NAV in base currency (newer reports win).
+    `flows` are external deposits/withdrawals; `[]` records "section present, none
+    found", while `None` leaves what is stored untouched.
+    """
     with _LOCK:
         state = read_history()
         old = state['accounts'].setdefault(account, {'trades': [], 'lots': []})
@@ -88,6 +107,12 @@ def save_history(account, trades=(), lots=None, report_end=None, coverage=None):
                 else:
                     merged[trade['exec_id']] = trade
         old['trades'] = sorted(merged.values(), key=lambda t: t['time'])
+        if nav:
+            old['nav'] = {**old.get('nav', {}), **nav}
+        if flows is not None:
+            by_id = {f['id']: f for f in old.get('flows', [])}
+            by_id.update({f['id']: f for f in flows})
+            old['flows'] = sorted(by_id.values(), key=lambda f: (f['day'], f['id']))
         if lots is not None and (not old.get('report_end') or report_end >= old['report_end']):
             old.update(lots=lots, report_end=report_end)
         if coverage:
@@ -108,6 +133,59 @@ def report_datetime(raw, zone):
     raise ValueError('Invalid Flex date/time')
 
 
+def _report_day(raw):
+    """Calendar date of a Flex report row (no timezone: it is the statement's own day)."""
+    value = str(raw or '').replace(';', ' ').split(' ')[0]
+    for fmt in ('%Y%m%d', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            pass
+    raise ValueError('Invalid Flex report date')
+
+
+def _parse_nav(node):
+    """Daily account NAV in base currency, or None when the query has no such section."""
+    rows = list(node.iter('EquitySummaryByReportDateInBase'))
+    if not rows:
+        return None
+    nav = {}
+    for row in rows:
+        total = float(row.get('total', 'nan'))
+        if not math.isfinite(total) or total < 0:
+            raise ValueError('Invalid Flex NAV value')
+        nav[_report_day(row.get('reportDate'))] = total
+    return nav
+
+
+def _parse_flows(node, base):
+    """External deposits/withdrawals in base currency; None when the section is absent.
+
+    Dividends, interest and fees are returns, not contributions, so they are skipped.
+    """
+    section = node.find('CashTransactions')
+    if section is None:
+        return None
+    rows = [r for r in section if r.tag == 'CashTransaction']
+    if rows and not any(r.get('levelOfDetail', 'DETAIL').upper() == 'DETAIL' for r in rows):
+        raise ValueError('Configure Flex Cash Transactions at Detail level')
+    flows = []
+    for row in rows:
+        a = row.attrib
+        if a.get('type') != 'Deposits/Withdrawals' or a.get('levelOfDetail', 'DETAIL').upper() != 'DETAIL':
+            continue
+        amount = float(a.get('amount', 'nan'))
+        if not math.isfinite(amount):
+            raise ValueError('Invalid Flex deposit amount')
+        rate = float(a['fxRateToBase']) if a.get('fxRateToBase') else (1.0 if a.get('currency') == base else None)
+        if rate is None or not valid_positive(rate):
+            raise ValueError('Flex deposit has no FX rate to base currency')
+        day = _report_day(a.get('reportDate') or a.get('dateTime') or a.get('settleDate'))
+        flows.append({'day': day, 'amount': amount * rate,
+                      'id': a.get('transactionID') or f"{day}|{a.get('currency')}|{amount}"})
+    return flows
+
+
 def parse_report(xml, zone):
     if len(xml) > 50_000_000 or b'<!DOCTYPE' in xml.upper():
         raise ValueError('Invalid Flex XML document')
@@ -124,6 +202,8 @@ def parse_report(xml, zone):
         trades, lots = [], []
         for row in node.iter():
             a = row.attrib
+            if row.tag == 'Trade' and a.get('transactionType') == 'BookTrade':
+                continue    # IBKR internal booking entry (zero price, no execution ID), not a fill
             if row.tag == 'Trade' and a.get('levelOfDetail', '').upper() == 'EXECUTION':
                 identity = a.get('ibExecID') or a.get('execID') or a.get('transactionID')
                 cancelled = 'Ca' in a.get('notes', '').split(';')
@@ -151,12 +231,14 @@ def parse_report(xml, zone):
                              'origin_id': a.get('originatingTransactionID'), 'report_end': end})
         if any(row.tag == 'OpenPosition' for row in node.iter()) and not lots:
             raise ValueError('Configure Flex Open Positions at Lot detail')
-        if any(row.tag == 'Trade' for row in node.iter()) and not trades:
+        if any(row.tag == 'Trade' and row.get('transactionType') != 'BookTrade' for row in node.iter()) and not trades:
             raise ValueError('Configure Flex Trades at Execution detail')
         info = node.find('.//AccountInformation')
+        base = info.get('currency') if info is not None else None
         statements.append({'account': account, 'trades': trades, 'lots': lots, 'report_end': end,
                            'from': node.get('fromDate'), 'to': node.get('toDate'),
-                           'opened': info.get('dateOpened') if info is not None else None})
+                           'opened': info.get('dateOpened') if info is not None else None,
+                           'nav': _parse_nav(node), 'flows': _parse_flows(node, base)})
     if not statements:
         raise ValueError('Flex query must include Activity statements, execution Trades and Open Positions Lots')
     return statements
@@ -173,12 +255,19 @@ def _request(endpoint, params):
         raise RuntimeError(f'Flex transport failed ({type(e).__name__})') from None
 
 
+class StatementNotAvailable(RuntimeError):
+    """IBKR error 1003: the requested range includes a day whose statement is not built yet."""
+
+
 def fetch_report(start, end, token, query):
     xml = _request('SendRequest', {'t': token, 'q': query, 'fd': start.strftime('%Y%m%d'), 'td': end.strftime('%Y%m%d')})
     root = ET.fromstring(xml)
     reference = root.findtext('ReferenceCode')
     if not reference or root.findtext('Status') != 'Success':
-        raise RuntimeError('Flex report generation failed; check query/token configuration')
+        code, text = root.findtext('ErrorCode'), (root.findtext('ErrorMessage') or '').replace(token, '***')
+        detail = f' (IBKR error {code}: {text[:200]})' if code or text else ''
+        failure = StatementNotAvailable if code == '1003' else RuntimeError
+        raise failure('Flex report generation failed; check query/token configuration' + detail)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         time.sleep(6)
@@ -198,7 +287,7 @@ def sync_history(account, token, query, zone):
     old = read_history()['accounts'].get(account, {})
     end = today - timedelta(days=1)
     latest_start = max(retained, end - timedelta(days=364))
-    if old.get('report_end'):
+    if old.get('report_end') and old.get('nav'):   # no stored NAV yet → re-read the whole latest window
         latest_start = max(latest_start, datetime.fromisoformat(old['report_end']).astimezone(ZoneInfo(zone)).date() - timedelta(days=2))
 
     def download(start, stop):
@@ -209,10 +298,20 @@ def sync_history(account, token, query, zone):
         if (report_datetime(report['from'], zone).astimezone(ZoneInfo(zone)).date() > start or
                 report_datetime(report['to'], zone).astimezone(ZoneInfo(zone)).date() < stop):
             raise ValueError('Flex returned incomplete requested date coverage')
-        save_history(account, report['trades'], report['lots'], report['report_end'])
+        save_history(account, report['trades'], report['lots'], report['report_end'],
+                     nav=report['nav'], flows=report['flows'])
         return report
 
-    latest = download(latest_start, end)
+    # Yesterday's statement is built overnight; if IBKR does not have it yet, end on the newest day it does.
+    for attempt in range(4):
+        try:
+            latest = download(latest_start, end)
+            break
+        except StatementNotAvailable:
+            if attempt == 3 or end <= latest_start:
+                raise
+            end -= timedelta(days=1)
+            time.sleep(2)     # IBKR rate-limits each token
     opened = report_datetime(latest['opened'], zone).astimezone(ZoneInfo(zone)).date() if latest.get('opened') else retained
     cursor = max(retained, opened)
     if old.get('coverage') and old['coverage']['from'] <= cursor.isoformat():

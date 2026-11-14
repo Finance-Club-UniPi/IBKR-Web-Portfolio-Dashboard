@@ -8,7 +8,7 @@ not rebuilt on every tick.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import plotly.graph_objects as go
 from dash import Input, Output, State, html, no_update
@@ -26,6 +26,7 @@ from backend.portfolio.history import (
     parse_symbols,
     search_instruments,
 )
+from backend.portfolio.performance import INCEPTION, inception_series
 from ui.helpers import ccy_symbol
 from ui.styles import (
     COLOR_BAD,
@@ -137,12 +138,25 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
     symbols = parse_symbols(compare_text)
 
     window = (start, end) if period == CUSTOM else ()   # presets keep the plain (period) calls
+    compare_period, actual = period, None
+    if period == INCEPTION:
+        # The account's own history (IBKR NAV, deposits removed), not a holdings backcast.
+        try:
+            levels = inception_series((holdings.get('account') or {}).get('account_id'))
+        except (ValueError, OSError) as e:
+            return _empty_figure('Account history unavailable.'), [], str(e)
+        counted_from = levels.attrs.get('counted_from')
+        actual = levels * levels.attrs['start_value']
+        # A week of look-back lets comparisons carry their last close onto day one.
+        compare_period = CUSTOM
+        window = (levels.index[0].date() - timedelta(days=7), levels.index[-1].date())
     results = run_parallel({
-        'portfolio': lambda: ((account_history(holdings, period, *window)[0], [])
+        'portfolio': lambda: ((actual, []) if actual is not None else
+                             (account_history(holdings, period, *window)[0], [])
                              if holdings.get('account', {}).get('net_liquidation') else
                              get_portfolio_history(holdings['positions'], base, period, *window)),
         'compare':   lambda: fetch_parallel(symbols,
-                                            lambda s: get_compare_history(s, period, *window)),
+                                            lambda s: get_compare_history(s, compare_period, *window)),
     })
     value, excluded = results.get('portfolio') or (None, [])
     compare = results.get('compare') or {}
@@ -193,6 +207,14 @@ def build_performance(holdings, period, mode, compare_text, start=None, end=None
         notes = [f"{frame.index[0]:%d %b %Y} → {frame.index[-1]:%d %b %Y}. Account-equity scenarios "
                  "at fixed current signed exposures, including cash FX. Dividend-adjusted prices; "
                  "not actual historical account balances. Financing, borrow fees and trading costs excluded."]
+    if actual is not None:
+        notes = [f"{frame.index[0]:%d %b %Y} → {frame.index[-1]:%d %b %Y}. Time-weighted return of the "
+                 "account from IBKR's daily NAV: cash is included and deposits/withdrawals are removed, "
+                 "so it is comparable with IBKR's own figure. It runs to the last Flex report day, "
+                 "not intraday. Absolute view shows the starting capital grown at that return."]
+        if counted_from:
+            notes.append(f"Counted from {date.fromisoformat(counted_from):%d %b %Y}: the first point is the "
+                         "close before that day, so the day's own move is included.")
     if mode == 'abs' and found:
         notes.append("Comparison instruments show the same starting capital invested in them, "
                      "in their own trading currency.")

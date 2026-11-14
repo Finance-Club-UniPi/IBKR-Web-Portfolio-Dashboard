@@ -96,6 +96,59 @@ def test_flex_protocol_uses_fixed_endpoints_and_retries_generation(monkeypatch):
     assert calls[1][1]['q'] == 'R'
 
 
+def test_generation_failure_reports_ibkr_error_without_the_token(monkeypatch):
+    reply = (b'<FlexStatementResponse><Status>Fail</Status><ErrorCode>1015</ErrorCode>'
+             b'<ErrorMessage>Token SECRET is invalid.</ErrorMessage></FlexStatementResponse>')
+    monkeypatch.setattr(flex, '_request', lambda endpoint, params: reply)
+    day = datetime(2026, 1, 1).date()
+    with pytest.raises(RuntimeError, match='IBKR error 1015: Token \\*\\*\\* is invalid') as caught:
+        flex.fetch_report(day, day, 'SECRET', 'Q')
+    assert 'SECRET' not in str(caught.value)
+
+
+def test_sync_steps_back_when_yesterdays_statement_is_not_built_yet(history_file, monkeypatch):
+    now = datetime.now(timezone.utc).date()
+    calls = []
+
+    def fetch(start, end, token, query):
+        calls.append(end)
+        if end > now - timedelta(days=3):
+            raise flex.StatementNotAvailable('IBKR error 1003')
+        text = xml().decode().replace('fromDate="20260101"', f'fromDate="{start:%Y%m%d}"')
+        return text.replace('toDate="20260102"', f'toDate="{end:%Y%m%d}"').encode()
+
+    monkeypatch.setattr(flex, 'fetch_report', fetch)
+    monkeypatch.setattr(flex.time, 'sleep', lambda _: None)
+    flex.sync_history('TEST', 'SECRET', 'Q', 'UTC')
+    assert calls[:3] == [now - timedelta(days=1), now - timedelta(days=2), now - timedelta(days=3)]
+    stored = flex.read_history()['accounts']['TEST']
+    assert stored['coverage']['to'] == (now - timedelta(days=3)).isoformat()   # not the day IBKR refused
+
+
+def test_sync_gives_up_after_a_few_unavailable_days(history_file, monkeypatch):
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        raise flex.StatementNotAvailable('IBKR error 1003')
+
+    monkeypatch.setattr(flex, 'fetch_report', fetch)
+    monkeypatch.setattr(flex.time, 'sleep', lambda _: None)
+    with pytest.raises(flex.StatementNotAvailable):
+        flex.sync_history('TEST', 'SECRET', 'Q', 'UTC')
+    assert len(calls) == 4
+
+
+def test_only_error_1003_is_treated_as_a_not_yet_built_statement(monkeypatch):
+    day = datetime(2026, 1, 1).date()
+    for code, kind in (('1003', flex.StatementNotAvailable), ('1015', RuntimeError)):
+        reply = f'<FlexStatementResponse><Status>Fail</Status><ErrorCode>{code}</ErrorCode></FlexStatementResponse>'.encode()
+        monkeypatch.setattr(flex, '_request', lambda endpoint, params, reply=reply: reply)
+        with pytest.raises(RuntimeError) as caught:
+            flex.fetch_report(day, day, 'SECRET', 'Q')
+        assert type(caught.value) is kind
+
+
 def test_sync_downloads_latest_lots_first_then_backfills(history_file, monkeypatch):
     now = datetime.now(timezone.utc).date()
     calls = []
